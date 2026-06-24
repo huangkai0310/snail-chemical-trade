@@ -1,176 +1,177 @@
 package main
 
 import (
-    "context"
-    "encoding/json"
-    "net/http"
-    "os"
-    "os/signal"
-    "syscall"
-    "time"
+	"context"
+	"encoding/json"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-    "github.com/gin-gonic/gin"
-    "github.com/gorilla/websocket"
-    "github.com/rs/zerolog"
-    "github.com/rs/zerolog/log"
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
-    "github.com/huangkai0310/snail-chemical-trade/matching-engine"
+	"github.com/huangkai0310/snail-chemical-trade/api-gateway/config"
+	"github.com/huangkai0310/snail-chemical-trade/api-gateway/db"
+	"github.com/huangkai0310/snail-chemical-trade/api-gateway/handler"
+	"github.com/huangkai0310/snail-chemical-trade/api-gateway/middleware"
+	"github.com/huangkai0310/snail-chemical-trade/api-gateway/repo"
+	"github.com/huangkai0310/snail-chemical-trade/matching-engine"
 )
 
 var (
-    engine *engine.Engine
-    upgrader = websocket.Upgrader{
-        CheckOrigin: func(r *http.Request) bool { return true },
-    }
-    wsClients = make(map[*websocket.Conn]bool)
-    broadcast = make(chan engine.Trade, 64)
+	eng         *engine.Engine
+	broadcast   = make(chan engine.Trade, 128)
+	wsClients   = make(map[*websocket.Conn]bool)
+	wsRegister  = make(chan *websocket.Conn)
+	wsUnregister = make(chan *websocket.Conn)
+	upgrader    = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
 )
 
 func main() {
-    // 日志
-    log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
+	// 日志
+	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).
+		With().Timestamp().Logger()
 
-    // 初始化撮合引擎
-    engine = engine.NewEngine()
+	// 加载配置
+	cfg := config.Load()
 
-    // 启动 WebSocket 广播
-    go wsBroadcaster()
+	// 连接数据库
+	pool, err := db.Connect(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("数据库连接失败")
+	}
+	defer pool.Close()
 
-    // 路由
-    r := gin.Default()
+	// 执行迁移
+	if err := db.RunMigrations(pool, ""); err != nil {
+		log.Fatal().Err(err).Msg("数据库迁移失败")
+	}
 
-    // 健康检查
-    r.GET("/health", func(c *gin.Context) {
-        c.JSON(200, gin.H{"status": "ok", "time": time.Now().Unix()})
-    })
+	// 初始化 Repo
+	userRepo := repo.NewUserRepo(pool)
+	productRepo := repo.NewProductRepo(pool)
+	listingRepo := repo.NewListingRepo(pool)
+	tradeRepo := repo.NewTradeRepo(pool)
 
-    // API v1
-    v1 := r.Group("/api/v1")
-    {
-        // 挂牌
-        v1.POST("/orders", placeOrder)
-        // 查询订单簿
-        v1.GET("/orderbook/:product", getOrderBook)
-        // 品种列表
-        v1.GET("/products", getProducts)
-    }
+	// 初始化撮合引擎
+	eng = engine.NewEngine()
 
-    // WebSocket 实时推送
-    r.GET("/ws", handleWebSocket)
+	// 初始化 Handler
+	authHandler := handler.NewAuthHandler(userRepo, cfg.JWTSecret)
+	listingHandler := handler.NewListingHandler(listingRepo, eng, tradeRepo, broadcast)
+	orderBookHandler := handler.NewOrderBookHandler(eng, productRepo)
 
-    // 优雅关闭
-    srv := &http.Server{
-        Addr:    ":8080",
-        Handler: r,
-    }
+	// 启动 WebSocket 管理器
+	go wsManager()
 
-    go func() {
-        log.Info().Msg("API Gateway starting on :8080")
-        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Fatal().Err(err).Msg("server error")
-        }
-    }()
+	// 路由
+	r := gin.Default()
 
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
+	// 健康检查
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "time": time.Now().Unix()})
+	})
 
-    log.Info().Msg("Shutting down...")
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    srv.Shutdown(ctx)
+	// Auth 路由组（无需认证）
+	auth := r.Group("/api/v1/auth")
+	{
+		auth.POST("/register", authHandler.Register)
+		auth.POST("/login", authHandler.Login)
+	}
+
+	// 公开路由
+	r.GET("/api/v1/products", orderBookHandler.GetProducts)
+	r.GET("/api/v1/orderbook/:product", orderBookHandler.GetOrderBook)
+
+	// 需要认证的路由
+	api := r.Group("/api/v1")
+	api.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+	{
+		api.GET("/auth/me", authHandler.Me)
+		api.POST("/listings", listingHandler.Create)
+		api.GET("/listings", listingHandler.List)
+		api.DELETE("/listings/:id", listingHandler.Cancel)
+	}
+
+	// WebSocket
+	r.GET("/ws", handleWebSocket)
+
+	// 优雅关闭
+	srv := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: r,
+	}
+
+	go func() {
+		log.Info().Str("port", cfg.Port).Msg("🚀 API Gateway 已启动")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("服务启动失败")
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Info().Msg("正在关闭服务...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	srv.Shutdown(ctx)
+	log.Info().Msg("服务已关闭")
 }
 
-// ===== Handlers =====
-
-type PlaceOrderReq struct {
-    ProductID string  `json:"product_id" binding:"required"`
-    Side      string  `json:"side" binding:"required,oneof=BUY SELL"`
-    Price     float64 `json:"price" binding:"required,gt=0"`
-    Quantity  float64 `json:"quantity" binding:"required,gt=0"`
-    UserID    string  `json:"user_id" binding:"required"`
-}
-
-func placeOrder(c *gin.Context) {
-    var req PlaceOrderReq
-    if err := c.ShouldBindJSON(&req); err != nil {
-        c.JSON(400, gin.H{"error": err.Error()})
-        return
-    }
-
-    order := engine.NewOrder(req.ProductID, engine.Side(req.Side), req.Price, req.Quantity, req.UserID)
-    trades := engine.Execute(order)
-
-    // 广播成交
-    for _, t := range trades {
-        broadcast <- t
-    }
-
-    c.JSON(200, gin.H{
-        "order":  order,
-        "trades": trades,
-    })
-}
-
-func getOrderBook(c *gin.Context) {
-    productID := c.Param("product")
-    book := engine.GetBook(productID)
-
-	book.Mu.RLock()
-	buyOrders := make([]*engine.Order, len(*book.BuyHeap))
-	sellOrders := make([]*engine.Order, len(*book.SellHeap))
-	copy(buyOrders, *book.BuyHeap)
-	copy(sellOrders, *book.SellHeap)
-	book.Mu.RUnlock()
-
-    c.JSON(200, gin.H{
-        "product_id": productID,
-        "bids":       buyOrders,
-        "asks":       sellOrders,
-    })
-}
-
-func getProducts(c *gin.Context) {
-    products := []gin.H{
-        {"id": "methanol", "name": "甲醇", "unit": "吨"},
-        {"id": "pta", "name": "PTA", "unit": "吨"},
-        {"id": "benzene", "name": "纯苯", "unit": "吨"},
-        {"id": "ethylene_glycol", "name": "乙二醇", "unit": "吨"},
-        {"id": "styrene", "name": "苯乙烯", "unit": "吨"},
-    }
-    c.JSON(200, products)
-}
-
-// ===== WebSocket =====
+// ========== WebSocket ==========
 
 func handleWebSocket(c *gin.Context) {
-    conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-    if err != nil {
-        log.Error().Err(err).Msg("ws upgrade failed")
-        return
-    }
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		log.Error().Err(err).Msg("WebSocket 升级失败")
+		return
+	}
 
-    wsClients[conn] = true
-    defer func() {
-        delete(wsClients, conn)
-        conn.Close()
-    }()
+	wsRegister <- conn
 
-    log.Info().Msg("WebSocket client connected")
+	defer func() {
+		wsUnregister <- conn
+		conn.Close()
+	}()
 
-    for {
-        _, _, err := conn.ReadMessage()
-        if err != nil {
-            break
-        }
-    }
+	// 保持连接
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
 }
 
-func wsBroadcaster() {
-    for trade := range broadcast {
-        msg, _ := json.Marshal(trade)
-        for client := range wsClients {
-            client.WriteMessage(websocket.TextMessage, msg)
-        }
-    }
+func wsManager() {
+	for {
+		select {
+		case conn := <-wsRegister:
+			wsClients[conn] = true
+			log.Info().Msg("WebSocket 客户端已连接")
+
+		case conn := <-wsUnregister:
+			if _, ok := wsClients[conn]; ok {
+				delete(wsClients, conn)
+				log.Info().Msg("WebSocket 客户端已断开")
+			}
+
+		case trade := <-broadcast:
+			msg, _ := json.Marshal(trade)
+			for client := range wsClients {
+				if err := client.WriteMessage(websocket.TextMessage, msg); err != nil {
+					client.Close()
+					delete(wsClients, client)
+				}
+			}
+		}
+	}
 }
