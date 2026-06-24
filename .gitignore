@@ -1,0 +1,52 @@
+# ===== Go =====
+*.exe
+*.test
+*.out
+vendor/
+backend/**/bin/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.so
+
+# ===== Node / Next.js =====
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Env & Secrets =====
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# ===== Docker =====
+docker-compose.override.yml
+
+# ===== Data (local) =====
+data/crawler/output/
+data/raw/
+data/processed/
+logs/
+
+# ===== Build =====
+tmp/
+temp/

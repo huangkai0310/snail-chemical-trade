@@ -1,0 +1,15 @@
+[project]
+name = "crawler"
+version = "0.1.0"
+description = "化工市场数据采集管线"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+crawler = "crawler.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
