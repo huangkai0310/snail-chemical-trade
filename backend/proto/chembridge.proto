@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package chembridge;
 
-option go_package = "github.com/snailchemical/chem-bridge/proto/gen/chembridge";
+option go_package = "github.com/huangkai0310/snail-chemical-trade/proto/gen/chembridge";
 
 // ===== 订单服务 =====
 

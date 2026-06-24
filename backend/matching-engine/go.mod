@@ -1,4 +1,4 @@
-module github.com/snailchemical/chem-bridge/matching-engine
+module github.com/huangkai0310/snail-chemical-trade/matching-engine
 
 go 1.22
 

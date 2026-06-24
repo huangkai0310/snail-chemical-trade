@@ -14,7 +14,7 @@ import (
     "github.com/rs/zerolog"
     "github.com/rs/zerolog/log"
 
-    "github.com/snailchemical/chem-bridge/matching-engine"
+    "github.com/huangkai0310/snail-chemical-trade/matching-engine"
 )
 
 var (
