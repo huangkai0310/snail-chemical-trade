@@ -30,6 +30,8 @@ dist/
 # ===== OS =====
 .DS_Store
 Thumbs.db
+debug.log
+*.log
 
 # ===== Env & Secrets =====
 .env
