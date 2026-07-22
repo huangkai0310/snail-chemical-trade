@@ -2,24 +2,247 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   Design Token System — Snail Chemical Trading Platform
+   专业、高效、可信赖 | 亮暗双主题 | 8pt 间距网格
+   ========================================================================== */
+
+/* ===== Dark Theme (default) ===== */
+:root,
+[data-theme="dark"] {
+  /* ── Background Layers (4 levels of depth) ── */
+  --bg-primary: #090c10;      /* App background — deeper to make panels pop */
+  --bg-secondary: #161b22;    /* Panel background */
+  --bg-tertiary: #1c2333;     /* Nested elements, inputs */
+  --bg-elevated: #1a1f2e;     /* Cards, modals */
+  --bg-hover: #252d3d;        /* Hover state */
+  --bg-active: #2d3748;       /* Active/selected state */
+  --bg-input: #1c2333;
+  --bg-panel: #161b22;        /* Panel/section background */
+  --bg-card: #1a1f2e;         /* Card/modal background */
+
+  /* ── Border (3 semantic levels) ── */
+  --border-color: #2d3748;
+  --border-subtle: rgba(45, 55, 72, 0.5);
+  --border-default: #2d3748;
+  --border-strong: #3b4555;
+
+  /* ── Text (3 semantic levels) ── */
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #5c6573;
+  --text-disabled: #484f58;
+
+  /* ── Accent / Brand ── */
+  --accent: #ef4444;           /* Red = primary action (Chinese convention: red up) */
+  --accent-hover: #dc2626;
+  --accent-bg: rgba(239, 68, 68, 0.12);
+  --accent-border: rgba(239, 68, 68, 0.3);
+
+  /* ── Trading Colors (Red up / Green down) ── */
+  --color-up: #ef4444;
+  --color-down: #22c55e;
+  --color-up-bg: rgba(239, 68, 68, 0.12);
+  --color-down-bg: rgba(34, 197, 94, 0.12);
+  --color-up-text: #f87171;
+  --color-down-text: #4ade80;
+
+  /* ── Status Colors ── */
+  --color-info: #38bdf8;
+  --color-info-bg: rgba(56, 189, 248, 0.12);
+  --color-warning: #f59e0b;
+  --color-warning-bg: rgba(245, 158, 11, 0.12);
+  --color-success: #22c55e;
+  --color-success-bg: rgba(34, 197, 94, 0.12);
+  --color-error: #ef4444;
+  --color-error-bg: rgba(239, 68, 68, 0.12);
+  --color-success-text: #4ade80;
+  --color-warning-text: #fbbf24;
+
+  /* ── Border Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* ── Shadows / Elevation ── */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-glow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+  --shadow-panel: 0 4px 20px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(45, 55, 72, 0.8);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(45, 55, 72, 0.6);
+
+  color-scheme: dark;
+}
+
+/* ===== Light Theme ===== */
+[data-theme="light"] {
+  /* ── Background Layers ── */
+  --bg-primary: #d8dee8;      /* App background — noticeably darker to separate panels */
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef1f5;
+  --bg-elevated: #ffffff;
+  --bg-hover: #eef1f5;
+  --bg-active: #e2e8f0;
+  --bg-input: #ffffff;
+  --bg-panel: #ffffff;        /* Panel/section background */
+  --bg-card: #ffffff;         /* Card/modal background */
+
+  /* ── Border ── */
+  --border-color: #e2e8f0;
+  --border-subtle: rgba(226, 232, 240, 0.5);
+  --border-default: #e2e8f0;
+  --border-strong: #cbd5e0;
+
+  /* ── Text ── */
+  --text-primary: #1a202c;
+  --text-secondary: #4a5568;
+  --text-muted: #718096;
+  --text-disabled: #a0aec0;
+
+  /* ── Accent / Brand ── */
+  --accent: #dc2626;
+  --accent-hover: #b91c1c;
+  --accent-bg: rgba(220, 38, 38, 0.08);
+  --accent-border: rgba(220, 38, 38, 0.25);
+
+  /* ── Trading Colors ── */
+  --color-up: #dc2626;
+  --color-down: #16a34a;
+  --color-up-bg: rgba(220, 38, 38, 0.08);
+  --color-down-bg: rgba(22, 163, 74, 0.08);
+  --color-up-text: #dc2626;
+  --color-down-text: #16a34a;
+
+  /* ── Status Colors ── */
+  --color-info: #0284c7;
+  --color-info-bg: rgba(2, 132, 199, 0.08);
+  --color-warning: #d97706;
+  --color-warning-bg: rgba(217, 119, 6, 0.08);
+  --color-success: #16a34a;
+  --color-success-bg: rgba(22, 163, 74, 0.08);
+  --color-error: #dc2626;
+  --color-error-bg: rgba(220, 38, 38, 0.08);
+  --color-success-text: #16a34a;
+  --color-warning-text: #d97706;
+
+  /* ── Border Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --shadow-glow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+  --shadow-panel: 0 3px 16px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  color-scheme: light;
+}
+
+/* ===== Base Styles ===== */
 @layer base {
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply antialiased overflow-hidden;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-feature-settings: "tnum" 1; /* tabular nums for data tables */
+  }
+
+  /* Consistent focus ring */
+  *:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 }
 
-/* Custom scrollbar */
+/* ===== Custom Scrollbar ===== */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: transparent;
 }
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #3b4555;
+  border-radius: 2px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #556075;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #cbd5e0;
+  border-radius: 2px;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #a0aec0;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ===== Utility Classes ===== */
+@layer components {
+  /* Panel header — unified across all panels */
+  .panel-header {
+    @apply flex items-center justify-between px-3 py-2 border-b shrink-0;
+    border-color: var(--border-color);
+    background-color: var(--bg-secondary);
+  }
+
+  .panel-title {
+    @apply text-xs font-semibold;
+    color: var(--text-primary);
+  }
+
+  .panel-meta {
+    @apply text-[11px];
+    color: var(--text-muted);
+  }
+
+  /* Data text — monospace for numbers */
+  .data-num {
+    @apply font-mono tabular-nums;
+  }
+
+  /* Hover row */
+  .hover-row {
+    @apply transition-colors cursor-pointer;
+  }
+  .hover-row:hover {
+    background-color: var(--bg-hover);
+  }
+}
+
+/* ===== Dark theme Tailwind aliases (backward compat) ===== */
+[data-theme="dark"] .dark\:bg-bg { background-color: #0d1117; }
+[data-theme="dark"] .dark\:bg-panel { background-color: #161b22; }
+[data-theme="dark"] .dark\:bg-card { background-color: #1a1f2e; }
+[data-theme="dark"] .dark\:bg-hover { background-color: #252d3d; }
+[data-theme="dark"] .dark\:border { border-color: #2d3748; }
+[data-theme="dark"] .dark\:text-primary { color: #e6edf3; }
+[data-theme="dark"] .dark\:text-secondary { color: #8b949e; }
+[data-theme="dark"] .dark\:text-muted { color: #5c6573; }
+
+/* ===== Spot / Forward tags (现货/远期纸货) ===== */
+.spot-tag {
+  background-color: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+.forward-tag {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+}
+[data-theme="dark"] .spot-tag {
+  background-color: rgba(96, 165, 250, 0.15);
+  color: #93c5fd;
+}
+[data-theme="dark"] .forward-tag {
+  background-color: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
 }

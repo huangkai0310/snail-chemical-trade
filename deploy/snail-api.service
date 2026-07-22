@@ -1,0 +1,22 @@
+[Unit]
+Description=Snail Chemical Trade API Gateway
+After=network.target postgresql.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/snailtrade
+EnvironmentFile=/opt/snailtrade/.env
+ExecStart=/opt/snailtrade/api-gateway
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/snailtrade/logs/access.log
+StandardError=append:/opt/snailtrade/logs/error.log
+
+# 安全加固
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

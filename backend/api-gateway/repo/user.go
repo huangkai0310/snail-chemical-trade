@@ -75,6 +75,54 @@ func (r *UserRepo) FindByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	return u, nil
 }
 
+// FindByCompanyName 按公司名称（大小写不敏感精确匹配）查找，可能返回多个同名公司用户
+func (r *UserRepo) FindByCompanyName(ctx context.Context, name string) ([]*User, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, username, email, phone, company_name, role, status, created_at, updated_at
+		 FROM users WHERE LOWER(company_name) = LOWER($1)`, name,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Phone, &u.CompanyName, &u.Role, &u.Status, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, nil
+}
+
+// SearchByCompanyOrUsername 按公司名称或用户名模糊搜索（ILIKE），返回最多 20 条
+func (r *UserRepo) SearchByCompanyOrUsername(ctx context.Context, q string) ([]*User, error) {
+	like := "%" + q + "%"
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, username, email, phone, company_name, role, status, created_at, updated_at
+		 FROM users
+		 WHERE company_name ILIKE $1 OR username ILIKE $1
+		 ORDER BY company_name, username
+		 LIMIT 20`, like,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Phone, &u.CompanyName, &u.Role, &u.Status, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, nil
+}
+
 // CheckPassword 验证密码
 func (r *UserRepo) CheckPassword(ctx context.Context, username, password string) (*User, error) {
 	u, err := r.FindByUsername(ctx, username)

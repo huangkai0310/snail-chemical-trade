@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=1440">
+<title>Snail Chemical — 交易大厅 v2 设计稿</title>
+<style>
+:root{
+--bg-primary:#0d1117;--bg-secondary:#161b22;--bg-tertiary:#1c2333;
+--bg-elevated:#1a1f2e;--bg-hover:#252d3d;--bg-active:#2d3748;--bg-input:#1c2333;
+--border-color:#2d3748;--border-subtle:rgba(45,55,72,0.4);--border-strong:#3b4555;
+--text-primary:#e6edf3;--text-secondary:#8b949e;--text-muted:#5c6573;--text-disabled:#484f58;
+--accent:#ef4444;--accent-hover:#dc2626;--accent-bg:rgba(239,68,68,0.12);--accent-border:rgba(239,68,68,0.3);
+--color-up:#ef4444;--color-down:#22c55e;--color-up-bg:rgba(239,68,68,0.1);--color-down-bg:rgba(34,197,94,0.08);
+--color-up-text:#f87171;--color-down-text:#4ade80;--color-info:#38bdf8;--color-info-bg:rgba(56,189,248,0.1);
+--color-warning:#f59e0b;--color-warning-bg:rgba(245,158,11,0.1);--color-success:#22c55e;
+--color-error:#ef4444;--radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-xl:12px;
+--shadow-sm:0 1px 3px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.03);
+--shadow-md:0 4px 12px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.04);
+--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+--font-mono:"JetBrains Mono","Cascadia Code","SF Mono",Consolas,monospace;
+}*{margin:0;padding:0;box-sizing:border-box}html,body{height:100%;overflow:hidden}
+body{font-family:var(--font-sans);background:var(--bg-primary);color:var(--text-primary);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;display:flex;align-items:center;justify-content:center}
+.terminal{width:1440px;height:900px;display:flex;flex-direction:column;background:var(--bg-primary);border-radius:var(--radius-xl);overflow:hidden;box-shadow:0 0 0 1px var(--border-color),0 20px 60px rgba(0,0,0,.5)}
+/* Topbar */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:44px;background:var(--bg-secondary);border-bottom:1px solid var(--border-color);flex-shrink:0}
+.tb-l{display:flex;align-items:center;gap:12px}.tb-logo{font-weight:700;font-size:14px;color:var(--accent);letter-spacing:-.3px}.tb-logo span{color:var(--text-secondary);font-weight:400}
+.tb-clock{font-family:var(--font-mono);font-size:12px;color:var(--text-muted);background:var(--bg-tertiary);padding:2px 8px;border-radius:var(--radius-sm)}
+.tb-mkt{display:flex;align-items:center;gap:16px;font-size:11px;color:var(--text-secondary)}
+.tb-mkt .up{color:var(--color-up-text);font-family:var(--font-mono);font-weight:600}
+.tb-mkt .dn{color:var(--color-down-text);font-family:var(--font-mono);font-weight:600}
+.tb-act{display:flex;gap:8px}.btn-icon{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);background:transparent;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;transition:all .15s}
+.btn-icon:hover{background:var(--bg-hover);color:var(--text-primary)}
+/* Panels */
+.panels{flex:1;display:flex;padding:8px;gap:8px;overflow:hidden}
+.panel{background:var(--bg-secondary);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--border-subtle)}
+.panel-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-subtle);flex-shrink:0;background:var(--bg-secondary)}
+.panel-hd-t{font-size:12px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:6px}
+.panel-hd-t .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.panel-hd-c{font-size:10px;color:var(--text-muted);background:var(--bg-tertiary);padding:2px 6px;border-radius:var(--radius-sm)}
+.panel-bd{flex:1;overflow-y:auto;min-height:0}
+.panel-bd::-webkit-scrollbar{width:4px}.panel-bd::-webkit-scrollbar-track{background:transparent}
+.panel-bd::-webkit-scrollbar-thumb{background:#3b4555;border-radius:2px}.panel-bd::-webkit-scrollbar-thumb:hover{background:#556075}
+/* Left */
+.panel-left{width:320px;flex-shrink:0}.tabs{display:flex;border-bottom:1px solid var(--border-subtle);flex-shrink:0}
+.tab{flex:1;padding:7px 12px;font-size:11px;font-weight:500;text-align:center;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;transition:all .15s}
+.tab:hover{color:var(--text-secondary)}.tab.on{color:var(--accent);border-bottom-color:var(--accent)}
+.p-row{display:flex;align-items:center;padding:8px 14px;gap:10px;cursor:pointer;transition:background .1s;border-bottom:1px solid var(--border-subtle)}
+.p-row:last-child{border-bottom:none}.p-row:hover{background:var(--bg-hover)}
+.p-row.sel{background:var(--accent-bg);border-left:2px solid var(--accent)}
+.p-sym{width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:var(--bg-tertiary);border-radius:var(--radius-md);font-family:var(--font-mono);font-size:12px;font-weight:700;color:var(--text-primary);flex-shrink:0}
+.p-info{flex:1;min-width:0}.p-name{font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:1px}.p-sub{font-size:10px;color:var(--text-muted)}
+.p-prc{text-align:right;flex-shrink:0}.p-prc .num{font-family:var(--font-mono);font-size:14px;font-weight:700}.p-prc .chg{font-size:10px;font-family:var(--font-mono);margin-top:1px}
+.up{color:var(--color-up)}.dn{color:var(--color-down)}.flat{color:var(--text-muted)}
+.search-wrap{padding:8px 14px;flex-shrink:0}.search-wrap input{width:100%;padding:6px 10px;font-size:11px;background:var(--bg-tertiary);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);color:var(--text-primary);outline:none;transition:border .15s}.search-wrap input:focus{border-color:var(--accent)}
+/* Center */
+.panel-center{flex:1;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.chart-box{flex:3;display:flex;flex-direction:column;background:var(--bg-secondary);border-radius:var(--radius-lg);border:1px solid var(--border-subtle);box-shadow:var(--shadow-sm);overflow:hidden}
+.chart-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-subtle);flex-shrink:0}
+.chart-hd-l{display:flex;align-items:baseline;gap:8px}
+.chart-name{font-size:15px;font-weight:700;color:var(--text-primary)}.chart-sym{font-size:11px;color:var(--text-muted);font-family:var(--font-mono)}
+.chart-prc{font-family:var(--font-mono);font-size:22px;font-weight:800;color:var(--color-up)}.chart-chg{font-family:var(--font-mono);font-size:12px;margin-left:6px}
+.tf-row{display:flex;gap:2px}.tf{font-size:10px;padding:3px 8px;border-radius:var(--radius-sm);border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-family:var(--font-sans);transition:all .15s}.tf:hover{color:var(--text-secondary);background:var(--bg-hover)}.tf.on{background:var(--accent-bg);color:var(--accent)}
+.chart-body{flex:1;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+.chart-vis{width:100%;height:100%;padding:16px 20px 24px 48px;position:relative}
+.chart-grid{position:absolute;left:48px;right:20px;top:16px;bottom:24px;border-left:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
+.chart-grid::before,.chart-grid::after{content:'';position:absolute;left:0;right:0;border-top:1px dashed var(--border-subtle)}.chart-grid::before{top:25%}.chart-grid::after{top:50%}
+.chart-y{position:absolute;left:8px;right:20px;top:16px;bottom:24px;pointer-events:none}
+.chart-yl{position:absolute;right:100%;font-size:9px;font-family:var(--font-mono);color:var(--text-muted);transform:translateY(-50%);padding-right:6px}
+.listing-box{flex:2;display:flex;flex-direction:column;background:var(--bg-secondary);border-radius:var(--radius-lg);border:1px solid var(--border-subtle);box-shadow:var(--shadow-sm);overflow:hidden}
+.listing-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-subtle);flex-shrink:0}
+.listing-tabs{display:flex;gap:2px}.l-tab{font-size:11px;font-weight:500;padding:4px 12px;border-radius:var(--radius-sm);border:none;background:transparent;color:var(--text-muted);cursor:pointer;transition:all .15s}.l-tab:hover{color:var(--text-secondary)}.l-tab.on{background:var(--bg-tertiary);color:var(--text-primary)}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:500}
+.badge-buy{background:var(--color-up-bg);color:var(--color-up-text)}.badge-sell{background:var(--color-down-bg);color:var(--color-down-text)}.badge-swap{background:var(--color-info-bg);color:var(--color-info)}
+.listing-table{width:100%;border-collapse:collapse}.listing-table th{position:sticky;top:0;padding:6px 8px;font-size:10px;font-weight:500;color:var(--text-muted);text-align:left;background:var(--bg-secondary);border-bottom:1px solid var(--border-subtle);z-index:1}.listing-table th:last-child{text-align:center}
+.listing-table td{padding:7px 8px;font-size:12px;border-bottom:1px solid var(--border-subtle);white-space:nowrap}.listing-table tr:hover td{background:var(--bg-hover)}.listing-table .pc{font-family:var(--font-mono);font-weight:600}.listing-table .qc{font-family:var(--font-mono);font-size:11px;color:var(--text-secondary)}.listing-table .tc{font-size:10px;color:var(--text-muted)}
+.btn-mini{padding:3px 10px;font-size:10px;font-weight:500;border-radius:var(--radius-sm);border:none;cursor:pointer;transition:all .15s}.btn-mini-red{background:var(--accent);color:#fff}.btn-mini-red:hover{background:var(--accent-hover)}.btn-mini-ol{background:transparent;color:var(--text-secondary);border:1px solid var(--border-color)}.btn-mini-ol:hover{border-color:var(--accent);color:var(--accent)}
+/* Right */
+.panel-right{width:300px;flex-shrink:0}
+.depth-sect{flex-shrink:0;border-bottom:1px solid var(--border-subtle)}.depth-rows{padding:6px 0}
+.d-row{display:grid;grid-template-columns:36px 1fr 56px;align-items:center;padding:3px 14px;font-size:11px;position:relative;gap:6px}.d-row .rk{font-size:10px;color:var(--text-muted);text-align:center}.d-row .pr{font-family:var(--font-mono);font-weight:600;text-align:center;z-index:1}.d-row .qt{font-family:var(--font-mono);text-align:right;color:var(--text-secondary)}.d-row .bar{position:absolute;right:0;top:1px;bottom:1px;border-radius:2px;z-index:0}.bar-bid{background:var(--color-up-bg)}.bar-ask{background:var(--color-down-bg)}.pr-bid{color:var(--color-up-text)}.pr-ask{color:var(--color-down-text)}
+.spread{display:flex;align-items:center;justify-content:center;padding:6px 14px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);gap:8px;font-size:11px}.spread-l{color:var(--text-muted)}.spread-v{font-family:var(--font-mono);color:var(--text-secondary)}
+.trade-rows{padding:2px 0}.t-row{display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;padding:3px 14px;font-size:11px}.t-row .tm{color:var(--text-muted);font-family:var(--font-mono);font-size:10px}.t-row .pr{font-family:var(--font-mono);font-weight:600;text-align:center}.t-row .qt{font-family:var(--font-mono);text-align:right;color:var(--text-secondary)}
+.order-strip{flex-shrink:0;border-top:1px solid var(--border-subtle);padding:10px 14px;display:flex;gap:6px}.btn-ord{flex:1;padding:8px 0;font-size:12px;font-weight:600;border-radius:var(--radius-sm);border:none;cursor:pointer;letter-spacing:1px;transition:all .15s}.btn-ord-buy{background:var(--color-up);color:#fff}.btn-ord-buy:hover{background:#dc2626}.btn-ord-sell{background:var(--color-down);color:#fff}.btn-ord-sell:hover{background:#16a34a}
+/* Status bar */
+.sbar{display:flex;align-items:center;justify-content:space-between;padding:0 14px;height:24px;background:var(--bg-secondary);border-top:1px solid var(--border-subtle);flex-shrink:0;font-size:10px;color:var(--text-muted)}.sdot{width:6px;height:6px;border-radius:50%;background:var(--color-success);display:inline-block;margin-right:4px;animation:pulse 2s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+</style>
+</head>
+<body>
+<div class="terminal">
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="tb-l"><span class="tb-logo">Snail<span>Chemical</span></span><span class="tb-clock">2026-07-04 11:28:36</span></div>
+    <div class="tb-mkt"><span>甲醇 MA</span><span class="up">▲2,456</span><span>PTA TA</span><span class="dn">▼5,812</span><span>苯乙烯 SM</span><span class="up">▲8,934</span></div>
+    <div class="tb-act"><button class="btn-icon">↻</button><button class="btn-icon">⛶</button><button class="btn-icon">⚙</button></div>
+  </div>
+
+  <!-- Panels -->
+  <div class="panels">
+    <!-- Left: Product List -->
+    <div class="panel panel-left">
+      <div class="tabs"><div class="tab on">自选 (6)</div><div class="tab">全部 (23)</div></div>
+      <div class="search-wrap"><input type="text" placeholder="搜索品种..."></div>
+      <div class="panel-bd">
+        <div class="p-row sel"><div class="p-sym" style="background:var(--accent-bg);color:var(--accent)">MA</div><div class="p-info"><div class="p-name">甲醇</div><div class="p-sub">Methanol · 交收地: 江苏</div></div><div class="p-prc"><div class="num up">2,456</div><div class="chg up">+1.82%</div></div></div>
+        <div class="p-row"><div class="p-sym">TA</div><div class="p-info"><div class="p-name">PTA</div><div class="p-sub">Purified Terephthalic Acid</div></div><div class="p-prc"><div class="num dn">5,812</div><div class="chg dn">-0.63%</div></div></div>
+        <div class="p-row"><div class="p-sym">SM</div><div class="p-info"><div class="p-name">苯乙烯</div><div class="p-sub">Styrene · 华东基准价</div></div><div class="p-prc"><div class="num up">8,934</div><div class="chg up">+0.42%</div></div></div>
+        <div class="p-row"><div class="p-sym">EG</div><div class="p-info"><div class="p-name">乙二醇</div><div class="p-sub">MEG · 华东港口</div></div><div class="p-prc"><div class="num dn">4,210</div><div class="chg dn">-1.15%</div></div></div>
+        <div class="p-row"><div class="p-sym">PP</div><div class="p-info"><div class="p-name">聚丙烯</div><div class="p-sub">PP · 拉丝级</div></div><div class="p-prc"><div class="num up">7,689</div><div class="chg up">+0.28%</div></div></div>
+        <div class="p-row"><div class="p-sym">BZ</div><div class="p-info"><div class="p-name">纯苯</div><div class="p-sub">Benzene · 华东</div></div><div class="p-prc"><div class="num up">7,156</div><div class="chg up">+2.10%</div></div></div>
+        <div class="p-row"><div class="p-sym">PL</div><div class="p-info"><div class="p-name">丙烯</div><div class="p-sub">Propylene · 山东</div></div><div class="p-prc"><div class="num flat">7,000</div><div class="chg flat">0.00%</div></div></div>
+        <div class="p-row"><div class="p-sym">IPA</div><div class="p-info"><div class="p-name">异丙醇</div><div class="p-sub">Isopropanol · 华东</div></div><div class="p-prc"><div class="num dn">8,520</div><div class="chg dn">-0.35%</div></div></div>
+        <div class="p-row"><div class="p-sym">PH</div><div class="p-info"><div class="p-name">苯酚</div><div class="p-sub">Phenol · 华东</div></div><div class="p-prc"><div class="num up">9,245</div><div class="chg up">+1.56%</div></div></div>
+        <div class="p-row"><div class="p-sym">TL</div><div class="p-info"><div class="p-name">甲苯</div><div class="p-sub">Toluene · 华东</div></div><div class="p-prc"><div class="num dn">6,880</div><div class="chg dn">-0.72%</div></div></div>
+      </div>
+    </div>
+
+    <!-- Center -->
+    <div class="panel-center">
+      <!-- Chart -->
+      <div class="chart-box">
+        <div class="chart-hd">
+          <div class="chart-hd-l"><span class="chart-name">甲醇 MA</span><span class="chart-sym">甲醇指数</span><span class="chart-prc">2,456</span><span class="chart-chg up">+44 (+1.82%)</span></div>
+          <div class="tf-row"><button class="tf on">1m</button><button class="tf">5m</button><button class="tf">15m</button><button class="tf">1H</button><button class="tf">4H</button><button class="tf">日K</button></div>
+        </div>
+        <div class="chart-body">
+          <div class="chart-vis">
+            <div class="chart-grid"></div>
+            <div class="chart-y"><span class="chart-yl" style="top:0">2,560</span><span class="chart-yl" style="top:25%">2,520</span><span class="chart-yl" style="top:50%">2,480</span><span class="chart-yl" style="top:75%">2,440</span><span class="chart-yl" style="top:100%">2,400</span></div>
+            <svg style="position:absolute;left:48px;right:20px;top:16px;bottom:24px" viewBox="0 0 700 200" preserveAspectRatio="none">
+              <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#ef4444" stop-opacity="0.25"/><stop offset="100%" stop-color="#ef4444" stop-opacity="0.02"/></linearGradient></defs>
+              <path d="M-10,140 L10,138 L30,135 L50,142 L70,139 L90,130 L110,125 L130,128 L150,120 L170,115 L190,118 L210,108 L230,105 L250,110 L270,102 L290,98 L310,100 L330,92 L350,88 L370,85 L390,90 L410,82 L430,78 L450,80 L470,75 L490,72 L510,68 L530,70 L550,64 L570,60 L590,62 L610,58 L630,55 L650,50 L670,48 L690,45 L710,43" fill="url(#g)"/>
+              <path d="M-10,140 L10,138 L30,135 L50,142 L70,139 L90,130 L110,125 L130,128 L150,120 L170,115 L190,118 L210,108 L230,105 L250,110 L270,102 L290,98 L310,100 L330,92 L350,88 L370,85 L390,90 L410,82 L430,78 L450,80 L470,75 L490,72 L510,68 L530,70 L550,64 L570,60 L590,62 L610,58 L630,55 L650,50 L670,48 L690,45 L710,43" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Listings -->
+      <div class="listing-box">
+        <div class="listing-hd">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="font-size:12px;font-weight:600">挂牌/换盘</span>
+            <div class="listing-tabs"><button class="l-tab on">全部</button><button class="l-tab">买盘</button><button class="l-tab">卖盘</button><button class="l-tab">换盘</button></div>
+          </div>
+          <span class="panel-hd-c">34 条</span>
+        </div>
+        <div class="panel-bd">
+          <table class="listing-table">
+            <thead><tr><th>时间</th><th>方向</th><th>价格</th><th>数量</th><th>交割期</th><th>交割地</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td class="tc">11:27:15</td><td><span class="badge badge-sell">卖盘</span></td><td class="pc dn">2,450</td><td class="qc">500 吨</td><td>2026-07-15</td><td>江苏 太仓</td><td>进行中</td><td><button class="btn-mini btn-mini-red">接盘</button></td></tr>
+              <tr><td class="tc">11:26:08</td><td><span class="badge badge-buy">买盘</span></td><td class="pc up">2,462</td><td class="qc">300 吨</td><td>2026-07-14</td><td>江苏 张家港</td><td>进行中</td><td><button class="btn-mini btn-mini-ol">还盘</button></td></tr>
+              <tr><td class="tc">11:24:52</td><td><span class="badge badge-swap">换盘</span></td><td class="pc" style="color:var(--text-primary)">1:1.05</td><td class="qc">200 吨</td><td>2026-07-20</td><td>江苏-浙江</td><td>匹配中</td><td><button class="btn-mini btn-mini-ol">查看</button></td></tr>
+              <tr><td class="tc">11:22:30</td><td><span class="badge badge-buy">买盘</span></td><td class="pc up">2,458</td><td class="qc">800 吨</td><td>2026-07-18</td><td>江苏 太仓</td><td>进行中</td><td><button class="btn-mini btn-mini-ol">还盘</button></td></tr>
+              <tr><td class="tc">11:19:44</td><td><span class="badge badge-sell">卖盘</span></td><td class="pc dn">2,448</td><td class="qc">350 吨</td><td>2026-07-16</td><td>浙江 宁波</td><td>拆单中</td><td><button class="btn-mini btn-mini-red">接盘</button></td></tr>
+              <tr><td class="tc">11:17:02</td><td><span class="badge badge-sell">卖盘</span></td><td class="pc dn">2,442</td><td class="qc">1,200 吨</td><td>2026-07-22</td><td>江苏 太仓</td><td>进行中</td><td><button class="btn-mini btn-mini-red">接盘</button></td></tr>
+              <tr><td class="tc">11:14:21</td><td><span class="badge badge-buy">买盘</span></td><td class="pc up">2,465</td><td class="qc">150 吨</td><td>2026-07-12</td><td>江苏 江阴</td><td>进行中</td><td><button class="btn-mini btn-mini-ol">还盘</button></td></tr>
+              <tr><td class="tc">11:10:55</td><td><span class="badge badge-swap">换盘</span></td><td class="pc" style="color:var(--text-primary)">1:1.02</td><td class="qc">500 吨</td><td>2026-07-25</td><td>江苏-山东</td><td>新发布</td><td><button class="btn-mini btn-mini-ol">查看</button></td></tr>
+              <tr><td class="tc">11:08:12</td><td><span class="badge badge-buy">买盘</span></td><td class="pc up">2,460</td><td class="qc">620 吨</td><td>2026-07-19</td><td>江苏 南京</td><td>已成交</td><td><span style="font-size:10px;color:var(--text-muted)">已完成</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Trade Panel -->
+    <div class="panel panel-right">
+      <!-- Depth: Ask -->
+      <div class="depth-sect">
+        <div class="depth-rows">
+          <div class="d-row"><div class="bar bar-ask" style="width:85%"></div><span class="rk">5</span><span class="pr pr-ask">2,490</span><span class="qt">1,200</span></div>
+          <div class="d-row"><div class="bar bar-ask" style="width:60%"></div><span class="rk">4</span><span class="pr pr-ask">2,488</span><span class="qt">850</span></div>
+          <div class="d-row"><div class="bar bar-ask" style="width:90%"></div><span class="rk">3</span><span class="pr pr-ask">2,485</span><span class="qt">2,100</span></div>
+          <div class="d-row"><div class="bar bar-ask" style="width:40%"></div><span class="rk">2</span><span class="pr pr-ask">2,482</span><span class="qt">520</span></div>
+          <div class="d-row"><div class="bar bar-ask" style="width:70%"></div><span class="rk">1</span><span class="pr pr-ask">2,480</span><span class="qt">980</span></div>
+        </div>
+      </div>
+      <!-- Spread -->
+      <div class="spread"><span class="spread-l">最新价</span><span style="font-family:var(--font-mono);font-weight:700;color:var(--color-up)">2,456</span><span class="spread-l">价差</span><span class="spread-v">4</span></div>
+      <!-- Depth: Bid -->
+      <div class="depth-sect">
+        <div class="depth-rows">
+          <div class="d-row"><div class="bar bar-bid" style="width:75%"></div><span class="rk">1</span><span class="pr pr-bid">2,452</span><span class="qt">680</span></div>
+          <div class="d-row"><div class="bar bar-bid" style="width:50%"></div><span class="rk">2</span><span class="pr pr-bid">2,450</span><span class="qt">420</span></div>
+          <div class="d-row"><div class="bar bar-bid" style="width:95%"></div><span class="rk">3</span><span class="pr pr-bid">2,448</span><span class="qt">1,850</span></div>
+          <div class="d-row"><div class="bar bar-bid" style="width:30%"></div><span class="rk">4</span><span class="pr pr-bid">2,446</span>        <span class="qt">300</span></div>
+          <div class="d-row"><div class="bar bar-bid" style="width:55%"></div><span class="rk">5</span><span class="pr pr-bid">2,444</span><span class="qt">560</span></div>
+        </div>
+      </div>
+      <!-- Trade history -->
+      <div class="panel-hd"><span class="panel-hd-t">成交明细</span><span class="panel-hd-c">23 笔</span></div>
+      <div class="panel-bd">
+        <div class="trade-rows">
+          <div class="t-row"><span class="tm">11:28:05</span><span class="pr up">2,456</span><span class="qt">120</span></div>
+          <div class="t-row"><span class="tm">11:27:52</span><span class="pr up">2,455</span><span class="qt">85</span></div>
+          <div class="t-row"><span class="tm">11:27:30</span><span class="pr dn">2,450</span><span class="qt">200</span></div>
+          <div class="t-row"><span class="tm">11:27:18</span><span class="pr up">2,453</span><span class="qt">150</span></div>
+          <div class="t-row"><span class="tm">11:26:55</span><span class="pr up">2,456</span><span class="qt">300</span></div>
+          <div class="t-row"><span class="tm">11:26:40</span><span class="pr dn">2,451</span><span class="qt">90</span></div>
+          <div class="t-row"><span class="tm">11:26:12</span><span class="pr up">2,454</span><span class="qt">180</span></div>
+          <div class="t-row"><span class="tm">11:25:58</span><span class="pr up">2,455</span><span class="qt">220</span></div>
+          <div class="t-row"><span class="tm">11:25:30</span><span class="pr dn">2,448</span><span class="qt">500</span></div>
+          <div class="t-row"><span class="tm">11:25:02</span><span class="pr up">2,452</span><span class="qt">75</span></div>
+          <div class="t-row"><span class="tm">11:24:45</span><span class="pr dn">2,449</span><span class="qt">310</span></div>
+          <div class="t-row"><span class="tm">11:24:20</span><span class="pr up">2,453</span><span class="qt">140</span></div>
+        </div>
+      </div>
+      <!-- Order buttons -->
+      <div class="order-strip">
+        <button class="btn-ord btn-ord-buy">买 入</button>
+        <button class="btn-ord btn-ord-sell">卖 出</button>
+      </div>
+    </div>
+  </div>
+  <!-- Status bar -->
+  <div class="sbar"><span><span class="sdot"></span>实时连接</span><span>Snail Chemical v2.0</span><span>延迟: 32ms</span></div>
+</div>
+</body>
+</html>

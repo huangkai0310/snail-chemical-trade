@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +13,12 @@ import (
 	"github.com/huangkai0310/snail-chemical-trade/api-gateway/middleware"
 	"github.com/huangkai0310/snail-chemical-trade/api-gateway/repo"
 )
+
+// 用户名白名单: 仅允许中文、字母、数字、下划线、横线
+var usernameRegex = regexp.MustCompile(`^[\p{Han}a-zA-Z0-9_-]+$`)
+
+// 危险字符检测: HTML标签、脚本关键字
+var dangerousPattern = regexp.MustCompile(`(?i)<[^>]*>|javascript:|onerror|onload|onclick|<script|<iframe|<img|<svg`)
 
 type AuthHandler struct {
 	userRepo  *repo.UserRepo
@@ -30,6 +37,18 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 用户名格式校验: 仅允许中文、字母、数字、下划线、横线
+	if !usernameRegex.MatchString(req.Username) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户名仅支持中文、字母、数字、下划线和横线"})
+		return
+	}
+
+	// 检查用户名是否包含危险字符
+	if dangerousPattern.MatchString(req.Username) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户名包含非法字符"})
 		return
 	}
 

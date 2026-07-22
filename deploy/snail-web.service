@@ -1,0 +1,19 @@
+[Unit]
+Description=Snail Chemical Trade Web (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/snailtrade/web
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/usr/local/bin/node server.js
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/snailtrade/logs/web.log
+StandardError=append:/opt/snailtrade/logs/web-error.log
+
+[Install]
+WantedBy=multi-user.target

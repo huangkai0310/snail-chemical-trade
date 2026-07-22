@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Providers } from "./providers";
+import Header from "@/components/Header";
+import ToastContainer from "@/components/Toast";
+import GlobalNotificationListener from "@/components/GlobalNotificationListener";
+import RouteMemory from "@/components/RouteMemory";
 
 export const metadata: Metadata = {
   title: "化工交易平台 - Snail Chemical Trade",
@@ -12,26 +17,23 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" suppressHydrationWarning>
+      <head>
+        {/* 首屏前恢复主题，避免重开闪回白天 / 暗色错位 */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("snailchem_theme");if(t!=="light"&&t!=="dark")t="dark";document.documentElement.setAttribute("data-theme",t);document.documentElement.style.colorScheme=t;}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();`,
+          }}
+        />
+      </head>
       <body>
-        {/* Top Nav */}
-        <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
-          <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center text-white font-bold text-sm">
-                化
-              </div>
-              <span className="font-bold text-gray-800 text-lg">化工交易平台</span>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">MVP</span>
-            </div>
-            <div className="flex items-center gap-4 text-sm text-gray-500">
-              <span>行情</span>
-              <span className="text-brand-600 font-medium">交易大厅</span>
-              <span>资讯</span>
-            </div>
-          </div>
-        </header>
-        {children}
+        <Providers>
+          <GlobalNotificationListener />
+          <RouteMemory />
+          <Header />
+          {children}
+          <ToastContainer />
+        </Providers>
       </body>
     </html>
   );

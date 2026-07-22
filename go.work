@@ -1,6 +1,6 @@
-go 1.22
+go 1.25.0
 
 use (
-    ./backend/matching-engine
-    ./backend/api-gateway
+	./backend/api-gateway
+	./backend/matching-engine
 )

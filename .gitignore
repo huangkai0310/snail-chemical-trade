@@ -4,6 +4,12 @@
 *.out
 vendor/
 backend/**/bin/
+# 编译产物（文件名，勿匹配源码目录）
+backend/api-gateway/api-gateway
+backend/api-gateway/api-gateway-linux
+backend/api-gateway/snail-trade-api
+backend/api-gateway-linux
+backend/build/
 
 # ===== Python =====
 __pycache__/
@@ -23,6 +29,7 @@ dist/
 # ===== IDE =====
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 *~
@@ -32,6 +39,7 @@ dist/
 Thumbs.db
 debug.log
 *.log
+nul
 
 # ===== Env & Secrets =====
 .env
@@ -49,6 +57,11 @@ data/raw/
 data/processed/
 logs/
 
-# ===== Build =====
+# ===== Build / deploy artifacts =====
 tmp/
 temp/
+*.zip
+*.baiduyun.uploading.cfg
+.workbuddy/
+deploy/snail-web*.zip
+deploy/api-gateway-linux

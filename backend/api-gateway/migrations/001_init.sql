@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS trades (
     price NUMERIC(12,2) NOT NULL,
     quantity NUMERIC(12,2) NOT NULL,
     amount NUMERIC(14,2) GENERATED ALWAYS AS (price * quantity) STORED,
+    delivery_period VARCHAR(32),
     traded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -73,9 +74,10 @@ CREATE INDEX IF NOT EXISTS idx_trades_traded_at ON trades(traded_at);
 
 -- ========== 种子数据 ==========
 INSERT INTO products (id, name, name_en, category, sort_order) VALUES
-    ('methanol', '甲醇', 'Methanol', '醇类', 1),
-    ('pta', 'PTA', 'PTA', '聚酯原料', 2),
-    ('benzene', '纯苯', 'Benzene', '芳烃', 3),
-    ('ethylene_glycol', '乙二醇', 'Ethylene Glycol', '醇类', 4),
-    ('styrene', '苯乙烯', 'Styrene', '芳烃', 5)
+    ('benzene', '纯苯', 'Benzene', '芳烃', 1),
+    ('propylene', '丙烯', 'Propylene', '烯烃', 2),
+    ('phenol', '苯酚', 'Phenol', '酚类', 3),
+    ('acetone', '丙酮', 'Acetone', '酮类', 4),
+    ('isopropanol', '异丙醇', 'Isopropanol', '醇类', 5),
+    ('mibk', '甲基异丁基酮', 'MIBK', '酮类', 6)
 ON CONFLICT (id) DO NOTHING;
