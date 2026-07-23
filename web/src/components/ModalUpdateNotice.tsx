@@ -4,13 +4,13 @@ import { useEffect } from "react";
 
 interface Props {
   show?: boolean;
-  /** updated=信息更新（常驻，需手动关闭）；withdrawn=对方撤盘（醒目常驻） */
+  /** updated=信息更新；withdrawn=对方撤盘 */
   variant?: "updated" | "withdrawn";
   message?: string;
   /** 对方修改的具体条款（高亮展示） */
   changedTerms?: string[];
   onDismiss?: () => void;
-  /** 仅 variant=updated 且 autoDismissMs>0 时自动消失 */
+  /** 自动消失毫秒数；默认 5s，传 0 则需手动关闭 */
   autoDismissMs?: number;
 }
 
@@ -21,24 +21,25 @@ function parseChangedTerms(message?: string): string[] {
   return m[1].split("、").filter(Boolean);
 }
 
+const DEFAULT_AUTO_DISMISS_MS = 5000;
+
 export default function ModalUpdateNotice({
   show,
   variant = "updated",
   message,
   changedTerms,
   onDismiss,
-  autoDismissMs = 0,
+  autoDismissMs = DEFAULT_AUTO_DISMISS_MS,
 }: Props) {
   const isWithdrawn = variant === "withdrawn";
   const terms = changedTerms ?? (isWithdrawn ? [] : parseChangedTerms(message));
 
-  // 信息更新提示：不自动消失，需用户手动关闭
   useEffect(() => {
-    if (!show || isWithdrawn || !onDismiss) return;
+    if (!show || !onDismiss) return;
     if (autoDismissMs <= 0) return;
     const t = setTimeout(onDismiss, autoDismissMs);
     return () => clearTimeout(t);
-  }, [show, isWithdrawn, onDismiss, autoDismissMs]);
+  }, [show, onDismiss, autoDismissMs]);
 
   if (!show) return null;
 

@@ -47,6 +47,8 @@ type Listing struct {
 	Remark            *string         `json:"remark,omitempty"`
 	ExpiresAt         *time.Time      `json:"expires_at,omitempty"` // 过期时间（默认当日 18:00）
 	StartsAt          *time.Time      `json:"starts_at,omitempty"`  // 计划开始时间；空=立即；未来=SCHEDULED
+	// Origin: post=主动发盘（默认）；take=摘盘对向单，不展示在盘面/我的挂盘
+	Origin            string          `json:"origin,omitempty"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
 }
@@ -77,18 +79,22 @@ func (r *ListingRepo) Create(ctx context.Context, l *Listing) error {
 	if status == "" {
 		status = string(ListingOpen)
 	}
+	origin := l.Origin
+	if origin == "" {
+		origin = "post"
+	}
 	nt := l.NegotiableTerms
 	if len(nt) == 0 || !json.Valid(nt) || string(bytes.TrimSpace(nt)) == "null" {
 		nt = json.RawMessage(`[]`)
 	}
 	return r.pool.QueryRow(ctx,
-		`INSERT INTO listings (user_id, product_id, side, price, quantity, min_quantity, delivery_period, delivery_location, payment_method, delivery_method, free_storage_enabled, free_storage_days, specs, remark, status, allow_partial, allow_counter_offer, negotiable_terms, expires_at, starts_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-		 RETURNING id, serial_no, filled, status, allow_partial, allow_counter_offer, expires_at, starts_at, created_at, updated_at`,
+		`INSERT INTO listings (user_id, product_id, side, price, quantity, min_quantity, delivery_period, delivery_location, payment_method, delivery_method, free_storage_enabled, free_storage_days, specs, remark, status, allow_partial, allow_counter_offer, negotiable_terms, expires_at, starts_at, origin)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+		 RETURNING id, serial_no, filled, status, allow_partial, allow_counter_offer, expires_at, starts_at, origin, created_at, updated_at`,
 		l.UserID, l.ProductID, l.Side, l.Price, l.Quantity, l.MinQuantity,
 		l.DeliveryPeriod, l.DeliveryLocation, l.PaymentMethod, l.DeliveryMethod, l.FreeStorageEnabled, l.FreeStorageDays, l.Specs, l.Remark, status,
-		l.AllowPartial, l.AllowCounterOffer, nt, l.ExpiresAt, l.StartsAt,
-	).Scan(&l.ID, &l.SerialNo, &l.Filled, &l.Status, &l.AllowPartial, &l.AllowCounterOffer, &l.ExpiresAt, &l.StartsAt, &l.CreatedAt, &l.UpdatedAt)
+		l.AllowPartial, l.AllowCounterOffer, nt, l.ExpiresAt, l.StartsAt, origin,
+	).Scan(&l.ID, &l.SerialNo, &l.Filled, &l.Status, &l.AllowPartial, &l.AllowCounterOffer, &l.ExpiresAt, &l.StartsAt, &l.Origin, &l.CreatedAt, &l.UpdatedAt)
 }
 
 // ListByProduct 查询某品种的活跃挂牌
@@ -98,6 +104,7 @@ func (r *ListingRepo) ListByProduct(ctx context.Context, productID string) ([]Li
 		        delivery_period, delivery_location, payment_method, delivery_method, free_storage_enabled, free_storage_days, specs, remark, expires_at, starts_at, created_at, updated_at
 		 FROM listings
 		 WHERE product_id = $1 AND status IN ('OPEN','PARTIAL')
+		   AND COALESCE(origin, 'post') <> 'take'
 		   AND (expires_at IS NULL OR expires_at > NOW())
 		 ORDER BY created_at DESC LIMIT 100`, productID)
 	if err != nil {
@@ -153,6 +160,8 @@ func (r *ListingRepo) ListFiltered(ctx context.Context, f ListFilter) ([]Listing
 		args = append(args, f.SerialNo)
 		argIdx++
 	} else {
+		// 摘盘对向单不进入盘面发盘列表（无论状态筛选）
+		where += " AND COALESCE(origin, 'post') <> 'take'"
 		if f.ProductID != "" {
 			where += " AND product_id = $" + strconv.Itoa(argIdx)
 			args = append(args, f.ProductID)
@@ -358,6 +367,7 @@ func (r *ListingRepo) ListActive(ctx context.Context) ([]Listing, error) {
 		        delivery_period, delivery_location, payment_method, delivery_method, free_storage_enabled, free_storage_days, specs, remark, expires_at, starts_at, created_at, updated_at
 		 FROM listings
 		 WHERE status IN ('OPEN','PARTIAL')
+		   AND COALESCE(origin, 'post') <> 'take'
 		   AND (expires_at IS NULL OR expires_at > NOW())
 		 ORDER BY created_at ASC`)
 	if err != nil {
@@ -387,7 +397,7 @@ func (r *ListingRepo) ListByUser(ctx context.Context, userID uuid.UUID, limit in
 		`SELECT id, serial_no, user_id, product_id, side, price, quantity, filled, status, allow_partial, allow_counter_offer, negotiable_terms, min_quantity,
 		        delivery_period, delivery_location, payment_method, delivery_method, free_storage_enabled, free_storage_days, specs, remark, expires_at, starts_at, created_at, updated_at
 		 FROM listings
-		 WHERE user_id = $1
+		 WHERE user_id = $1 AND COALESCE(origin, 'post') <> 'take'
 		 ORDER BY created_at DESC LIMIT $2`, userID, limit)
 	if err != nil {
 		return nil, err

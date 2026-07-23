@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 
 interface Toast {
   id: number;
@@ -8,28 +8,50 @@ interface Toast {
   type: "success" | "error" | "info";
 }
 
-let addToastFn: ((message: string, type: Toast["type"]) => void) | null = null;
+/** 各类型默认自动消失时间（毫秒）；0 表示不自动消失 */
+const DEFAULT_DISMISS_MS: Record<Toast["type"], number> = {
+  success: 5000,
+  info: 5000,
+  error: 8000,
+};
 
-/** 全局 Toast 调用函数（跨组件使用） */
-export function toast(message: string, type: Toast["type"] = "info") {
-  addToastFn?.(message, type);
+let addToastFn: ((message: string, type: Toast["type"], durationMs?: number) => void) | null = null;
+
+/** 全局 Toast；durationMs 可覆盖默认自动消失时间，传 0 则需手动关闭 */
+export function toast(message: string, type: Toast["type"] = "info", durationMs?: number) {
+  addToastFn?.(message, type, durationMs);
 }
 
 export default function ToastContainer() {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const timersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const dismiss = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    const t = timersRef.current.get(id);
+    if (t) {
+      clearTimeout(t);
+      timersRef.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((x) => x.id !== id));
   }, []);
 
-  const addToast = useCallback((message: string, type: Toast["type"]) => {
+  const addToast = useCallback((message: string, type: Toast["type"], durationMs?: number) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, type }]);
-  }, []);
+    const ms = durationMs ?? DEFAULT_DISMISS_MS[type];
+    if (ms > 0) {
+      const timer = setTimeout(() => dismiss(id), ms);
+      timersRef.current.set(id, timer);
+    }
+  }, [dismiss]);
 
   useEffect(() => {
     addToastFn = addToast;
-    return () => { addToastFn = null; };
+    return () => {
+      addToastFn = null;
+      timersRef.current.forEach((t) => clearTimeout(t));
+      timersRef.current.clear();
+    };
   }, [addToast]);
 
   if (toasts.length === 0) return null;

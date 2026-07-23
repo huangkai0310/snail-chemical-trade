@@ -306,6 +306,8 @@ func (h *ListingHandler) Take(c *gin.Context) {
 		FreeStorageEnabled: target.FreeStorageEnabled,
 		FreeStorageDays:    target.FreeStorageDays,
 		Specs:              target.Specs,
+		// 摘盘对向单：仅用于撮合/成交关联，不进入盘面发盘列表
+		Origin:            "take",
 		// 摘盘对向单立即撮合，不可再议价；negotiable_terms 为 NOT NULL，须显式写入
 		AllowCounterOffer: false,
 		NegotiableTerms:   json.RawMessage(`[]`),

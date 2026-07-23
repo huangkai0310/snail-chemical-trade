@@ -139,6 +139,13 @@ export default function TradingPage() {
   const [tradeToast, setTradeToast] = useState<string | null>(null);
   const [chartInterval, setChartInterval] = useState("30m");
 
+  // 页内 tradeToast 与全局 Toast 一致：约 5 秒自动消失
+  useEffect(() => {
+    if (!tradeToast) return;
+    const t = setTimeout(() => setTradeToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [tradeToast]);
+
   // 议价弹窗
   const [counterOfferTarget, setCounterOfferTarget] = useState<{
     listing?: Listing;
@@ -1220,7 +1227,7 @@ export default function TradingPage() {
         </div>
       </div>
 
-      {/* ===== Toast 提示（仅用户手动关闭，不自动消失） ===== */}
+      {/* ===== Toast 提示（约 5 秒自动消失） ===== */}
       {tradeToast && (
         <div className="relative mx-3 mt-1 px-8 py-1.5 rounded text-[11px] text-center animate-pulse shrink-0 border"
           style={{ backgroundColor: "var(--color-success-bg)", borderColor: "var(--color-success)", color: "var(--color-success-text)" }}

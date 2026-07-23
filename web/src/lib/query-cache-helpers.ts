@@ -46,14 +46,34 @@ export function findSwapInList(list: SwapListing[], id: string): SwapListing | u
   return list.find((s) => s.id === id);
 }
 
-/** 挂牌是否已不可交易（对方撤盘/成交/过期） */
+/** 挂牌是否被对方撤盘/过期（不含已成交——全成应显示「已成交」而非「撤盘」） */
 export function isListingWithdrawn(l: Listing): boolean {
-  return l.status === "CANCELLED" || l.status === "EXPIRED" || l.status === "FILLED";
+  return l.status === "CANCELLED" || l.status === "EXPIRED";
 }
 
-/** 换盘是否已不可交易 */
+/** 挂牌是否已全部成交 */
+export function isListingFilled(l: Listing): boolean {
+  return l.status === "FILLED";
+}
+
+/** 挂牌是否已不可再交易（成交/撤盘/过期） */
+export function isListingUntradable(l: Listing): boolean {
+  return isListingFilled(l) || isListingWithdrawn(l);
+}
+
+/** 换盘是否被对方撤盘（不含已撮合完成） */
 export function isSwapWithdrawn(s: SwapListing): boolean {
-  return s.status === "CANCELLED" || s.status === "MATCHED";
+  return s.status === "CANCELLED";
+}
+
+/** 换盘是否已全部撮合 */
+export function isSwapMatched(s: SwapListing): boolean {
+  return s.status === "MATCHED";
+}
+
+/** 换盘是否已不可再交易 */
+export function isSwapUntradable(s: SwapListing): boolean {
+  return isSwapMatched(s) || isSwapWithdrawn(s);
 }
 
 export function wasListingActive(l: Listing): boolean {

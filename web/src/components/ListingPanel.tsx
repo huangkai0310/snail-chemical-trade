@@ -630,6 +630,7 @@ export default function ListingPanel({
     const isMine = !!currentUserId && detailListing.user_id === currentUserId;
     const updated = findListingInLists([buyListings, sellListings], detailListing.id);
     if (!updated && wasListingActive(detailListing)) {
+      // 列表中消失：默认列表不含 CANCELLED，视为撤盘；已成交仍会留在列表里
       if (!isMine) setDetailWithdrawn(true);
       return;
     }
@@ -639,12 +640,13 @@ export default function ListingPanel({
         setDetailWithdrawn(true);
         setDetailUpdated(false);
       } else if (entityChanged(detailListing, updated)) {
-        // 自己的盘子：静默同步，不提示「对方已修改」
+        // 已成交等：静默同步状态，不弹「对方已撤盘」
         if (!isMine && hasEditorialEntityUpdate(detailListing, updated)) {
           setDetailUpdateMessage(describeEntityUpdate(detailListing, updated));
           setDetailUpdated(true);
         }
         setDetailListing(updated);
+        if (updated.status === "FILLED") setDetailWithdrawn(false);
       }
     }
   }, [buyListings, sellListings]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -668,6 +670,7 @@ export default function ListingPanel({
           setDetailUpdated(true);
         }
         setDetailSwap(updated);
+        if (updated.status === "MATCHED") setDetailWithdrawn(false);
       }
     }
   }, [swapListings]); // eslint-disable-line react-hooks/exhaustive-deps
