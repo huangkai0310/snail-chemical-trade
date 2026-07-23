@@ -41,7 +41,7 @@ const INDICATOR_TOOLTIPS: Record<string, string> = {
   volume: "成交量：当日累计成交的总吨数，量升价增为多头信号，量缩价跌为空头信号。",
   turnover: "成交额：当日累计成交的总金额（元），与成交量结合可观察市场参与热度。",
   yesterday: "昨日结算价：上一个工作日所有行情成交按成交量加权的均价（VWAP）。工作日按国务院放假安排：跳过法定节假日，调休上班日计入工作日。",
-  spot: "现货价：当前市场上最新一笔成交的即时价格，反映即时的供需平衡点，也是期货价格锚定的基准。",
+  spot: "现货价：该品种现货合约的最新成交价（交割期=现货），与当前所选交割期无关，是远期合约锚定的基准。",
 };
 
 const STATS_STALE_MS = 15_000;
@@ -77,10 +77,18 @@ export default function MarketSummaryPanel({ productId, productName, deliveryPer
     refetchInterval: STATS_STALE_MS,
   });
 
-  // 最新价
-  const latestQuery = useQuery({
+  // 当前所选交割期的最新价（大号现价 / 昨结涨跌）
+  const contractLatestQuery = useQuery({
     queryKey: ["latestPrice", productId, deliveryPeriod],
     queryFn: () => fetchLatestPrice(productId, deliveryPeriod),
+    staleTime: 5_000,
+    refetchInterval: 10_000,
+  });
+
+  // 品种现货价：固定交割期=现货，与盘面所选交割期无关（与品种详情头一致）
+  const spotLatestQuery = useQuery({
+    queryKey: ["latestPrice", productId, "现货"],
+    queryFn: () => fetchLatestPrice(productId, "现货"),
     staleTime: 5_000,
     refetchInterval: 10_000,
   });
@@ -95,10 +103,11 @@ export default function MarketSummaryPanel({ productId, productName, deliveryPer
 
   const candles = dailyQuery.data ?? [];
   const todayCandle = useMemo(() => candles.find(isTodayCandle), [candles]);
-  const spotPrice = latestQuery.data?.latest ?? 0;
+  const contractPrice = contractLatestQuery.data?.latest ?? 0;
+  const spotPrice = spotLatestQuery.data?.latest ?? 0;
   const prevSettle =
-    latestQuery.data?.prev_settle ??
-    latestQuery.data?.prev_24h ??
+    contractLatestQuery.data?.prev_settle ??
+    contractLatestQuery.data?.prev_24h ??
     0;
 
   // 计算指标
@@ -135,7 +144,7 @@ export default function MarketSummaryPanel({ productId, productName, deliveryPer
     1
   );
 
-  const isUp = spotPrice >= (prevSettle > 0 ? prevSettle : spotPrice);
+  const isUp = contractPrice >= (prevSettle > 0 ? prevSettle : contractPrice);
   const activeTooltip = indicators.find(i => i.key === tooltipKey);
 
   return (
@@ -177,19 +186,19 @@ export default function MarketSummaryPanel({ productId, productName, deliveryPer
             <div className="py-2 text-center text-xs text-t-text-3">暂无今日行情</div>
           ) : (
             <div className="relative">
-              {/* 最新价大号展示 */}
+              {/* 当前交割期最新价大号展示；现货价在下方指标格，固定取品种现货 */}
               <div className="px-3 pt-2 pb-1 text-center">
                 <div className={`text-3xl font-bold font-mono ${isUp ? "text-trade-up-text" : "text-trade-down-text"}`}>
-                  ¥{spotPrice > 0 ? spotPrice.toFixed(1) : "-"}
+                  ¥{contractPrice > 0 ? contractPrice.toFixed(1) : "-"}
                 </div>
                 {indicators.find(i => i.key === "yesterday")?.value && (
                   <div className="flex items-center justify-center gap-2 mt-0.5">
                     <span className="text-[11px] text-t-text-3">
                       昨结 {indicators.find(i => i.key === "yesterday")?.value}
                     </span>
-                    {spotPrice > 0 && prevSettle > 0 && (
+                    {contractPrice > 0 && prevSettle > 0 && (
                       <span className={`text-[11px] font-mono px-1 rounded ${isUp ? "text-trade-up-text bg-trade-up-bg" : "text-trade-down-text bg-trade-down-bg"}`}>
-                        {isUp ? "+" : ""}{((spotPrice - prevSettle) / prevSettle * 100).toFixed(2)}%
+                        {isUp ? "+" : ""}{((contractPrice - prevSettle) / prevSettle * 100).toFixed(2)}%
                       </span>
                     )}
                   </div>

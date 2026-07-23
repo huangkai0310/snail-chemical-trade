@@ -219,6 +219,8 @@ export default function TradingPage() {
     editListingTarget,
     editSwapTarget,
   };
+  // 摘盘请求进行中：禁止把「缓存里暂时找不到挂牌」误判成对方撤盘
+  const takeInFlightRef = useRef(false);
 
   const syncOpenModalsFromCache = useCallback(() => {
     const snap = modalSyncRef.current;
@@ -229,7 +231,10 @@ export default function TradingPage() {
     if (snap.takeTarget) {
       const found = findListingInCache(queryClient, snap.takeTarget.id);
       if (!found && wasListingActive(snap.takeTarget)) {
-        withdrawn.take = true;
+        // 自己摘盘请求进行中时列表可能瞬时不同步，不能当成对方撤盘
+        if (!takeInFlightRef.current) {
+          withdrawn.take = true;
+        }
       } else if (found) {
         if (isListingWithdrawn(found)) {
           setTakeTarget(found);
@@ -628,43 +633,18 @@ export default function TradingPage() {
     },
   });
 
+  // 摘盘：不在 onMutate 里乐观删列表（会触发 sync → 误显「对方已撤盘」）
   const takeMutation = useMutation({
     mutationFn: ({ id, quantity }: { id: string; quantity: number }) =>
       takeListing(id, quantity),
-    onMutate: async ({ id, quantity }) => {
-      await queryClient.cancelQueries({ queryKey: ["listingsFiltered"] });
-      const entries = queryClient.getQueryCache().findAll({ queryKey: ["listingsFiltered"] });
-      const previous = entries.map((entry) => ({
-        queryKey: entry.queryKey,
-        data: queryClient.getQueryData<{ data: Listing[]; total: number }>(entry.queryKey),
-      }));
-      entries.forEach((entry) => {
-        const key = entry.queryKey;
-        const current = queryClient.getQueryData<{ data: Listing[]; total: number }>(key);
-        if (!current) return;
-        const target = current.data.find((l) => l.id === id);
-        if (!target) return;
-        const remaining = target.quantity - target.filled;
-        if (quantity >= remaining) {
-          queryClient.setQueryData(key, {
-            ...current,
-            data: current.data.filter((l) => l.id !== id),
-            total: Math.max(0, current.total - 1),
-          });
-        } else {
-          queryClient.setQueryData(key, {
-            ...current,
-            data: current.data.map((l) =>
-              l.id === id ? { ...l, filled: l.filled + quantity } : l
-            ),
-          });
-        }
-      });
-      return { previous };
+    onMutate: () => {
+      takeInFlightRef.current = true;
     },
     onSuccess: (res) => {
+      takeInFlightRef.current = false;
       setTakeTarget(null);
       setTakeError(null);
+      setModalWithdrawn((s) => ({ ...s, take: false }));
       dismissDetailStack();
       toast("摘盘成功！", "success");
       if ((res.trades?.length ?? 0) > 0) {
@@ -674,17 +654,12 @@ export default function TradingPage() {
         queryClient.invalidateQueries({ queryKey: ["orderbook", productId] });
       }
     },
-    onError: (err, _variables, context) => {
-      if (context?.previous) {
-        context.previous.forEach((item) => {
-          if (item.data) {
-            queryClient.setQueryData(item.queryKey, item.data);
-          }
-        });
-      }
+    onError: (err) => {
+      takeInFlightRef.current = false;
+      // 失败时清除误判的「对方已撤盘」，只展示真实错误（如保证金不足）
+      setModalWithdrawn((s) => ({ ...s, take: false }));
       const msg = err instanceof ApiError ? err.message : "摘盘失败";
       setTakeError(msg);
-      // 顶部错误条由 takeMutation.isError 展示，用户手动关闭
     },
   });
 
@@ -833,6 +808,7 @@ export default function TradingPage() {
 
   const handleTake = (listingId: string, quantity: number) => {
     setTakeError(null);
+    setModalWithdrawn((s) => ({ ...s, take: false }));
     takeMutation.mutate({ id: listingId, quantity });
   };
 

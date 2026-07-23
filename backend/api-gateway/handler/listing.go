@@ -325,7 +325,8 @@ func (h *ListingHandler) Take(c *gin.Context) {
 		if err != nil {
 			log.Error().Err(err).Msg("摘盘保证金冻结失败")
 			h.listingRepo.Cancel(ctx, taker.ID, userID)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "保证金冻结失败: " + err.Error()})
+			// 直接返回余额/保证金错误文案，避免被前端误当成撤盘类错误
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 	}
@@ -333,6 +334,16 @@ func (h *ListingHandler) Take(c *gin.Context) {
 	takerOrder := listingToOrder(taker)
 	trades, err := h.eng.TakeListing(target.ProductID, targetID.String(), takerOrder)
 	if err != nil {
+		rollbackTake := func() {
+			if h.accountRepo != nil {
+				if relErr := h.accountRepo.ReleaseMargin(ctx, taker.ID); relErr != nil {
+					log.Error().Err(relErr).Str("taker_id", taker.ID.String()).Msg("摘盘失败后解冻保证金失败")
+				}
+			}
+			if cancelErr := h.listingRepo.Cancel(ctx, taker.ID, userID); cancelErr != nil {
+				log.Error().Err(cancelErr).Str("taker_id", taker.ID.String()).Msg("摘盘失败后撤销对向单失败")
+			}
+		}
 		if errors.Is(err, engine.ErrOrderNotFound) {
 			// 目标挂牌不在内存订单簿中（可能引擎重启丢失），尝试重新加载
 			targetOrder := listingToOrder(target)
@@ -340,6 +351,7 @@ func (h *ListingHandler) Take(c *gin.Context) {
 			log.Warn().Str("target_id", targetID.String()).Msg("重新加载目标挂牌到订单簿")
 			trades, err = h.eng.TakeListing(target.ProductID, targetID.String(), takerOrder)
 			if err != nil {
+				rollbackTake()
 				if errors.Is(err, engine.ErrPriceMismatch) || errors.Is(err, engine.ErrNoQuantity) {
 					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 					return
@@ -349,6 +361,7 @@ func (h *ListingHandler) Take(c *gin.Context) {
 				return
 			}
 		} else if errors.Is(err, engine.ErrPriceMismatch) || errors.Is(err, engine.ErrNoQuantity) || errors.Is(err, engine.ErrMinQuantity) {
+			rollbackTake()
 			msg := err.Error()
 			if errors.Is(err, engine.ErrMinQuantity) {
 				msg = "摘盘数量低于对方最小成交量，请增加摘盘数量或摘满剩余量"
@@ -356,6 +369,7 @@ func (h *ListingHandler) Take(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		} else {
+			rollbackTake()
 			log.Error().Err(err).Msg("摘盘撮合失败")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "摘盘失败"})
 			return
