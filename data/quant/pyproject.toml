@@ -3,6 +3,14 @@ name = "quant"
 version = "0.1.0"
 description = "化工产品量化分析引擎"
 requires-python = ">=3.12"
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [build-system]
 requires = ["setuptools>=75"]
