@@ -67,6 +67,23 @@
 
 ### 数据采集管线
 
+**当前 MVP（已落地）**
+
+```
+[crawler CLI]
+    ├── platform  → ChemBridge 公开 API（OHLCV / 最新价）
+    ├── csv       → 外部报价文件导入（卓创/隆众等手工导出）
+    └── sample    → 合成样例（离线调试）
+           │
+           ▼
+[data/warehouse]  CSV / JSONL 本地仓库
+           │
+           ▼
+[quant CLI]  指标 / 波动率分析 / EWMA 预测
+```
+
+**目标态（成长期）**
+
 ```
 [Scrapy/Python]
     ├── 郑商所/大商所 行情

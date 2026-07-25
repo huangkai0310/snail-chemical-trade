@@ -51,16 +51,22 @@ docker-compose up -d
 cd backend/api-gateway
 go run .
 
-# 3. 启动数据采集（按需）
-cd data/crawler
-pip install -e .
-python -m crawler
+# 3. 数据采集 + 量化分析（按需）
+cd data/crawler && pip install -e .
+crawler collect -s sample -p benzene -i 1d -n 90   # 离线样例
+# crawler collect -s platform -p benzene -i 1d -n 120  # 生产 API
+
+cd ../quant && pip install -e .
+quant analyze -p benzene -i 1d
+quant forecast -p benzene -i 1d --horizon 5
 
 # 4. 启动前端
 cd web
 npm install
 npm run dev
 ```
+
+数据落盘见 `data/warehouse/`；模块说明见 `data/crawler/README.md`、`data/quant/README.md`。
 
 ## 域名规划
 
