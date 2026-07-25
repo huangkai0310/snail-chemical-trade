@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -477,9 +478,10 @@ func (r *ListingRepo) BeginTx(ctx context.Context) (pgx.Tx, error) {
 
 // ExpiredListing 过期清理返回项（用于从撮合引擎移除并推送）
 type ExpiredListing struct {
-	ID        uuid.UUID
-	ProductID string
-	UserID    uuid.UUID
+	ID             uuid.UUID
+	ProductID      string
+	UserID         uuid.UUID
+	DeliveryPeriod *string
 }
 
 // ExpireOutdated 将已到 expires_at 的 OPEN/PARTIAL 挂牌标记为 EXPIRED
@@ -493,7 +495,7 @@ func (r *ListingRepo) ExpireOutdated(ctx context.Context) ([]ExpiredListing, err
 		     (expires_at IS NOT NULL AND expires_at <= NOW())
 		     OR (expires_at IS NULL AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'))
 		   )
-		 RETURNING id, product_id, user_id`,
+		 RETURNING id, product_id, user_id, delivery_period`,
 	)
 	if err != nil {
 		return nil, err
@@ -503,7 +505,7 @@ func (r *ListingRepo) ExpireOutdated(ctx context.Context) ([]ExpiredListing, err
 	var out []ExpiredListing
 	for rows.Next() {
 		var e ExpiredListing
-		if err := rows.Scan(&e.ID, &e.ProductID, &e.UserID); err != nil {
+		if err := rows.Scan(&e.ID, &e.ProductID, &e.UserID, &e.DeliveryPeriod); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -535,4 +537,26 @@ func (r *ListingRepo) ActivateScheduled(ctx context.Context) ([]ExpiredListing, 
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ForceExpireByContract 将某品种+交割期下仍活跃的挂盘强制标记为 EXPIRED（交割已过清理）
+func (r *ListingRepo) ForceExpireByContract(ctx context.Context, productID, deliveryPeriod string) (int64, error) {
+	productID = strings.TrimSpace(productID)
+	deliveryPeriod = NormalizeContractPeriod(deliveryPeriod)
+	if productID == "" || deliveryPeriod == "现货" {
+		return 0, nil
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE listings
+		SET status = 'EXPIRED', updated_at = NOW()
+		WHERE product_id = $1
+		  AND status IN ('OPEN','PARTIAL','SCHEDULED')
+		  AND CASE WHEN delivery_period IS NULL OR TRIM(delivery_period) = '' THEN '现货'
+		           ELSE TRIM(delivery_period) END = $2`,
+		productID, deliveryPeriod,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

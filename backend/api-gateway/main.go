@@ -18,11 +18,13 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/huangkai0310/snail-chemical-trade/api-gateway/calendar"
 	"github.com/huangkai0310/snail-chemical-trade/api-gateway/config"
 	"github.com/huangkai0310/snail-chemical-trade/api-gateway/db"
 	"github.com/huangkai0310/snail-chemical-trade/api-gateway/handler"
 	"github.com/huangkai0310/snail-chemical-trade/api-gateway/middleware"
 	"github.com/huangkai0310/snail-chemical-trade/api-gateway/repo"
+	"github.com/huangkai0310/snail-chemical-trade/api-gateway/scheduler"
 	engine "github.com/huangkai0310/snail-chemical-trade/matching-engine"
 )
 
@@ -33,11 +35,13 @@ type wsClientInfo struct {
 }
 
 var (
-	eng         *engine.Engine
-	broadcast   = make(chan engine.Trade, 128)
+	eng              *engine.Engine
+	broadcast        = make(chan engine.Trade, 128)
 	listingBroadcast = make(chan engine.ListingEvent, 128)
-	wsRegister  = make(chan wsClientInfo)
-	wsUnregister = make(chan wsClientInfo)
+	marketBroadcast  = make(chan handler.MarketStatusEvent, 32)
+	contractBroadcast = make(chan handler.ContractsChangedEvent, 64)
+	wsRegister       = make(chan wsClientInfo)
+	wsUnregister     = make(chan wsClientInfo)
 
 	// wsUserConns: user_id → 该用户所有 WS 连接（支持多 Tab）
 	wsUserConns   = make(map[uuid.UUID][]*websocket.Conn)
@@ -79,6 +83,15 @@ func main() {
 	counterOfferRepo := repo.NewCounterOfferRepo(pool)
 	blacklistRepo := repo.NewBlacklistRepo(pool)
 	preferencesRepo := repo.NewPreferencesRepo(pool)
+	indicatorCacheRepo := repo.NewIndicatorCacheRepo(pool)
+
+	// 初始化 Admin Repo
+	holidayRepo := repo.NewHolidayRepo(pool)
+	marketConfigRepo := repo.NewMarketConfigRepo(pool)
+	cronTaskRepo := repo.NewCronTaskRepo(pool)
+
+	// 初始化日历服务：节假日从数据库读取（fallback 到内置 2025-2026 数据）
+	calendar.SetGlobalCalendarService(holidayRepo)
 
 	// 初始化撮合引擎
 	eng = engine.NewEngine()
@@ -108,12 +121,38 @@ func main() {
 	counterOfferHandler := handler.NewCounterOfferHandler(counterOfferRepo, listingRepo, tradeRepo, accountRepo, pool, eng, broadcast)
 	blacklistHandler := handler.NewBlacklistHandler(blacklistRepo, userRepo)
 	preferencesHandler := handler.NewPreferencesHandler(preferencesRepo)
+	indicatorCacheHandler := handler.NewIndicatorCacheHandler(indicatorCacheRepo)
+
+	// 初始化 Admin Handlers
+	adminDictHandler := handler.NewAdminDictHandler(pool)
+	adminProductHandler := handler.NewAdminProductHandler(productRepo)
+	adminHolidayHandler := handler.NewAdminHolidayHandler(holidayRepo)
+	adminMarketConfigHandler := handler.NewAdminMarketConfigHandler(marketConfigRepo)
+	adminMarketConfigHandler.SetMarketBroadcast(marketBroadcast)
+	adminCronTaskHandler := handler.NewAdminCronTaskHandler(cronTaskRepo)
+
 	// 注入议价 Repo 到 listingHandler 和 swapHandler（用于撤盘/成交时自动取消关联 PENDING 议价）
 	listingHandler.SetCounterOfferRepo(counterOfferRepo)
 	swapHandler.SetCounterOfferRepo(counterOfferRepo)
 	// 注入黑名单 Repo 到 listingHandler 和 swapHandler（用于摘牌/换盘还盘前检查黑名单 + 列表标记）
 	listingHandler.SetBlacklistRepo(blacklistRepo)
 	swapHandler.SetBlacklistRepo(blacklistRepo)
+	// 注入市场配置 Repo（用于闭市时拒绝新挂牌/摘盘/换盘发布/换盘成交）
+	listingHandler.SetMarketConfigRepo(marketConfigRepo)
+	swapHandler.SetMarketConfigRepo(marketConfigRepo)
+	// 品种+交割期合约：首次发布时建立
+	contractRepo := repo.NewProductContractRepo(pool)
+	contractHandler := handler.NewContractHandler(contractRepo)
+	contractHandler.SetPreferencesRepo(preferencesRepo)
+	contractHandler.SetListingRepo(listingRepo)
+	contractHandler.SetContractBroadcast(contractBroadcast)
+	contractHandler.SetListingBroadcast(listingBroadcast)
+	listingHandler.SetContractRepo(contractRepo)
+	swapHandler.SetContractRepo(contractRepo)
+	listingHandler.SetContractBroadcast(contractBroadcast)
+	swapHandler.SetContractBroadcast(contractBroadcast)
+	listingHandler.SetPreferencesRepo(preferencesRepo)
+	swapHandler.SetPreferencesRepo(preferencesRepo)
 	// 注入 pool 和 wsPush 到 listingHandler（用于 #697-6 普通挂牌→换盘锁单撮合）
 	listingHandler.SetPool(pool)
 	listingHandler.SetWSPush(func(targetUserID uuid.UUID, msgType string, payload interface{}) {
@@ -171,11 +210,9 @@ func main() {
 	// 启动 WebSocket 管理器
 	go wsManager()
 
-	// 启动定时任务：每分钟将已到 expires_at 的未成交挂牌标记为 EXPIRED
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		// 启动后立即跑一次，避免重启后积压
+	// 启动动态定时任务调度器（从 cron_tasks 表读取配置，支持后台管理界面增删改查/启停）
+	sched := scheduler.NewScheduler(cronTaskRepo)
+	sched.Register("expire_listings", func(ctx context.Context) error {
 		listingHandler.ExpireListings()
 		listingHandler.ActivateScheduled()
 		listingHandler.NotifyScheduleReminders()
@@ -184,34 +221,21 @@ func main() {
 			swapHandler.ActivateScheduled()
 			swapHandler.NotifyScheduleReminders()
 		}
-		for range ticker.C {
-			listingHandler.ExpireListings()
-			listingHandler.ActivateScheduled()
-			listingHandler.NotifyScheduleReminders()
-			if swapHandler != nil {
-				swapHandler.ExpireSwaps()
-				swapHandler.ActivateScheduled()
-				swapHandler.NotifyScheduleReminders()
-			}
-		}
-	}()
-
-	// 启动定时任务：每天凌晨 00:05 将当天之前未回复的 PENDING 议价标记为 EXPIRED
-	go func() {
-		for {
-			now := time.Now()
-			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 5, 0, 0, now.Location())
-			if now.Hour() >= 1 || (now.Hour() == 0 && now.Minute() >= 5) {
-				next = next.AddDate(0, 0, 1)
-			}
-			log.Info().Time("next_run", next).Msg("过期议价清理任务已调度")
-			time.Sleep(time.Until(next))
-			counterOfferHandler.ExpirePending()
-		}
-	}()
+		return nil
+	})
+	sched.Register("expire_counter_offers", func(ctx context.Context) error {
+		counterOfferHandler.ExpirePending()
+		return nil
+	})
+	sched.Register("purge_past_contracts", func(ctx context.Context) error {
+		contractHandler.PurgePastContracts()
+		return nil
+	})
+	sched.Start()
 
 	// 路由
 	r := gin.Default()
+	r.Use(middleware.CORS())
 
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {
@@ -228,6 +252,9 @@ func main() {
 
 	// 公开路由
 	r.GET("/api/v1/products", orderBookHandler.GetProducts)
+	r.GET("/api/v1/products/:id/contracts", contractHandler.ListByProduct)
+	r.GET("/api/v1/contracts", contractHandler.ListAll)
+	r.GET("/api/v1/market-status", adminMarketConfigHandler.GetMarketStatus)
 	r.GET("/api/v1/orderbook/:product", orderBookHandler.GetOrderBook)
 	r.GET("/api/v1/trades", tradeHandler.List)
 	r.GET("/api/v1/trades/price-history", tradeHandler.PriceHistory)
@@ -235,6 +262,12 @@ func main() {
 	// 盘子详情（公开，无需认证，用独立前缀避免与 /listings/:id 路由冲突）
 	r.GET("/api/v1/listing-detail/:id", listingHandler.GetByID)
 	r.GET("/api/v1/swap-detail/:id", swapHandler.GetByID)
+
+	// 指标缓存（公开，行情数据）
+	r.POST("/api/v1/indicators", indicatorCacheHandler.Upsert)
+	r.GET("/api/v1/indicators", indicatorCacheHandler.Get)
+	r.GET("/api/v1/indicators/list", indicatorCacheHandler.List)
+	r.DELETE("/api/v1/indicators", indicatorCacheHandler.Delete)
 
 	// 需要认证的路由
 	api := r.Group("/api/v1")
@@ -286,11 +319,51 @@ func main() {
 		api.PUT("/preferences", preferencesHandler.Update)
 	}
 
-	// Admin 路由（需要认证，且只允许来自服务器内部或管理后台）
+	// Admin 路由（需要认证 + 管理员权限）
 	admin := r.Group("/api/v1/admin")
 	admin.Use(middleware.AuthMiddleware(cfg.JWTSecret))
+	admin.Use(middleware.AdminMiddleware(userRepo))
 	{
+		// 原有过期挂牌清理
 		admin.POST("/expire-listings", listingHandler.ExpireListingsHandler)
+
+		// 品种管理
+		admin.GET("/products", adminProductHandler.List)
+		admin.POST("/products", adminProductHandler.Create)
+		admin.PUT("/products/:id", adminProductHandler.Update)
+		admin.DELETE("/products/:id", adminProductHandler.Delete)
+
+		// 字典表管理（6种字典类型通过 dictType 路径参数区分）
+		// dictType: delivery-periods | delivery-locations | product-specs | payment-methods | delivery-methods | free-storage
+		admin.GET("/dict/:dictType", adminDictHandler.List)
+		admin.POST("/dict/:dictType", adminDictHandler.Create)
+		admin.PUT("/dict/:dictType/:id", adminDictHandler.Update)
+		admin.DELETE("/dict/:dictType/:id", adminDictHandler.Delete)
+
+		// 节假日管理
+		admin.GET("/holidays", adminHolidayHandler.List)
+		admin.POST("/holidays", adminHolidayHandler.Create)
+		admin.PUT("/holidays/:id", adminHolidayHandler.Update)
+		admin.DELETE("/holidays/:id", adminHolidayHandler.Delete)
+		admin.POST("/holidays/batch", adminHolidayHandler.BatchUpsert)
+		admin.DELETE("/holidays/year/:year", adminHolidayHandler.DeleteByYear)
+
+		// 市场配置管理
+		admin.GET("/market-config", adminMarketConfigHandler.List)
+		admin.GET("/market-config/:key", adminMarketConfigHandler.Get)
+		admin.PUT("/market-config/:key", adminMarketConfigHandler.Set)
+		admin.DELETE("/market-config/:key", adminMarketConfigHandler.Delete)
+
+		// 市场开闭市开关
+		admin.GET("/market-status", adminMarketConfigHandler.GetMarketStatus)
+		admin.PUT("/market-status", adminMarketConfigHandler.SetMarketStatus)
+
+		// 定时任务管理
+		admin.GET("/cron-tasks", adminCronTaskHandler.List)
+		admin.POST("/cron-tasks", adminCronTaskHandler.Create)
+		admin.PUT("/cron-tasks/:id", adminCronTaskHandler.Update)
+		admin.DELETE("/cron-tasks/:id", adminCronTaskHandler.Delete)
+		admin.PUT("/cron-tasks/:id/toggle", adminCronTaskHandler.Toggle)
 	}
 
 	// WebSocket
@@ -422,6 +495,30 @@ type wsBroadcastMsg struct {
 	Payload interface{} `json:"payload"`
 }
 
+func broadcastAll(connUser map[*websocket.Conn]uuid.UUID, msg []byte) {
+	for conn := range connUser {
+		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			conn.Close()
+			uid := connUser[conn]
+			delete(connUser, conn)
+			wsUserConnsMu.Lock()
+			conns := wsUserConns[uid]
+			newConns := make([]*websocket.Conn, 0, len(conns))
+			for _, c := range conns {
+				if c != conn {
+					newConns = append(newConns, c)
+				}
+			}
+			if len(newConns) == 0 {
+				delete(wsUserConns, uid)
+			} else {
+				wsUserConns[uid] = newConns
+			}
+			wsUserConnsMu.Unlock()
+		}
+	}
+}
+
 func wsManager() {
 	// 内部维护 conn → userID 映射，避免遍历时加锁
 	connUser := make(map[*websocket.Conn]uuid.UUID)
@@ -487,28 +584,15 @@ func wsManager() {
 		case ev := <-listingBroadcast:
 			// 广播新挂牌事件，触发其他用户发盘列表实时刷新
 			msg, _ := json.Marshal(wsBroadcastMsg{Type: "new_listing", Payload: ev})
-			for conn := range connUser {
-				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-					conn.Close()
-					uid := connUser[conn]
-					delete(connUser, conn)
-					// 同步从 wsUserConns 移除
-					wsUserConnsMu.Lock()
-					conns := wsUserConns[uid]
-					newConns := make([]*websocket.Conn, 0, len(conns))
-					for _, c := range conns {
-						if c != conn {
-							newConns = append(newConns, c)
-						}
-					}
-					if len(newConns) == 0 {
-						delete(wsUserConns, uid)
-					} else {
-						wsUserConns[uid] = newConns
-					}
-					wsUserConnsMu.Unlock()
-				}
-			}
+			broadcastAll(connUser, msg)
+
+		case ev := <-marketBroadcast:
+			msg, _ := json.Marshal(wsBroadcastMsg{Type: "market_status", Payload: ev})
+			broadcastAll(connUser, msg)
+
+		case ev := <-contractBroadcast:
+			msg, _ := json.Marshal(wsBroadcastMsg{Type: "contracts_changed", Payload: ev})
+			broadcastAll(connUser, msg)
 
 		case <-ticker.C:
 			// 定期 ping 所有连接，清理死连接

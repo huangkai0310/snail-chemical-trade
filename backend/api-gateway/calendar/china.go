@@ -1,9 +1,15 @@
 // Package calendar 提供中国大陆法定节假日 / 调休上班日判断，
 // 用于昨结等业务的「上一工作日」计算。
-// 数据来源：国务院办公厅当年节假日安排通知；每年国务院发文后需补充。
+// 数据来源：holidays 表（由管理后台维护），启动时 fallback 到内置 2025-2026 数据。
 package calendar
 
-import "time"
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
+)
 
 // Shanghai 交易日历时区（北京时间）
 var Shanghai *time.Location
@@ -15,6 +21,8 @@ func init() {
 		Shanghai = time.FixedZone("CST", 8*3600)
 	}
 }
+
+// —— 内置 fallback 数据（仅在 holidays 表无数据时使用）——
 
 // 法定放假日（含调休连休中的周末）
 var holidays = map[string]struct{}{}
@@ -97,4 +105,69 @@ func PrevWorkdayStart(from time.Time) time.Time {
 		d = d.AddDate(0, 0, -1)
 	}
 	return DayStart(from).AddDate(0, 0, -1)
+}
+
+// ========== CalendarService：支持从数据库读取节假日 ==========
+
+// HolidayQueryer 节假日查询接口（由 repo.HolidayRepo 实现）
+type HolidayQueryer interface {
+	IsWorkday(ctx context.Context, t time.Time) (bool, error)
+	PrevWorkdayStart(ctx context.Context, from time.Time) (time.Time, error)
+}
+
+// CalendarService 日历服务，优先从数据库查询，fallback 到内置数据
+type CalendarService struct {
+	queryer HolidayQueryer
+	// 缓存：避免每次查 DB。key = "2006-01-02" → isWorkday
+	mu    sync.RWMutex
+	cache map[string]bool
+}
+
+var globalCalendarService *CalendarService
+
+// SetGlobalCalendarService 设置全局日历服务（main.go 启动时调用）
+func SetGlobalCalendarService(q HolidayQueryer) {
+	globalCalendarService = &CalendarService{
+		queryer: q,
+		cache:   make(map[string]bool),
+	}
+	log.Info().Msg("日历服务已初始化，节假日数据将从数据库读取")
+}
+
+// IsWorkdayDB 从数据库查询工作日（fallback 到静态数据）
+func IsWorkdayDB(ctx context.Context, t time.Time) bool {
+	if globalCalendarService != nil && globalCalendarService.queryer != nil {
+		key := DayStart(t).Format("2006-01-02")
+		globalCalendarService.mu.RLock()
+		if v, ok := globalCalendarService.cache[key]; ok {
+			globalCalendarService.mu.RUnlock()
+			return v
+		}
+		globalCalendarService.mu.RUnlock()
+
+		result, err := globalCalendarService.queryer.IsWorkday(ctx, t)
+		if err != nil {
+			log.Warn().Err(err).Msg("数据库查询工作日失败，fallback 到内置数据")
+			return IsWorkday(t)
+		}
+
+		globalCalendarService.mu.Lock()
+		globalCalendarService.cache[key] = result
+		globalCalendarService.mu.Unlock()
+		return result
+	}
+	return IsWorkday(t)
+}
+
+// PrevWorkdayStartDB 从数据库查询上一工作日（fallback 到静态数据）
+func PrevWorkdayStartDB(ctx context.Context, from time.Time) time.Time {
+	if globalCalendarService != nil && globalCalendarService.queryer != nil {
+		result, err := globalCalendarService.queryer.PrevWorkdayStart(ctx, from)
+		if err != nil {
+			log.Warn().Err(err).Msg("数据库查询上一工作日失败，fallback 到内置数据")
+			return PrevWorkdayStart(from)
+		}
+		return result
+	}
+	return PrevWorkdayStart(from)
 }

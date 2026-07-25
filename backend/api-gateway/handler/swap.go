@@ -187,15 +187,19 @@ type UpdateSwapRequest struct {
 }
 
 type SwapHandler struct {
-	pool             *pgxpool.Pool
-	tradeRepo        *repo.TradeRepo
-	coRepo           *repo.CounterOfferRepo
-	blacklistRepo    *repo.BlacklistRepo
-	listingRepo      *repo.ListingRepo
-	broadcast        chan<- engine.Trade
-	listingBroadcast chan<- engine.ListingEvent
-	wsPush           func(targetUserID uuid.UUID, msgType string, payload interface{})
-	afterCreateMatch func(ctx context.Context, swapID uuid.UUID)
+	pool              *pgxpool.Pool
+	tradeRepo         *repo.TradeRepo
+	coRepo            *repo.CounterOfferRepo
+	blacklistRepo     *repo.BlacklistRepo
+	listingRepo       *repo.ListingRepo
+	marketConfigRepo  *repo.MarketConfigRepo
+	contractRepo      *repo.ProductContractRepo
+	preferencesRepo   *repo.PreferencesRepo
+	contractBroadcast chan<- ContractsChangedEvent
+	broadcast         chan<- engine.Trade
+	listingBroadcast  chan<- engine.ListingEvent
+	wsPush            func(targetUserID uuid.UUID, msgType string, payload interface{})
+	afterCreateMatch  func(ctx context.Context, swapID uuid.UUID)
 }
 
 func NewSwapHandler(pool *pgxpool.Pool) *SwapHandler {
@@ -230,6 +234,54 @@ func (h *SwapHandler) SetBlacklistRepo(blRepo *repo.BlacklistRepo) {
 // SetListingRepo 注入 listing Repo（用于换盘锁单与普通挂牌自动撮合）
 func (h *SwapHandler) SetListingRepo(lRepo *repo.ListingRepo) {
 	h.listingRepo = lRepo
+}
+
+// SetMarketConfigRepo 注入市场配置 Repo（用于闭市时拒绝换盘发布/成交）
+func (h *SwapHandler) SetMarketConfigRepo(mcRepo *repo.MarketConfigRepo) {
+	h.marketConfigRepo = mcRepo
+}
+
+// SetContractRepo 注入品种合约 Repo（首次发布建立合约）
+func (h *SwapHandler) SetContractRepo(r *repo.ProductContractRepo) {
+	h.contractRepo = r
+}
+
+// SetContractBroadcast 注入合约变更广播
+func (h *SwapHandler) SetContractBroadcast(ch chan<- ContractsChangedEvent) {
+	h.contractBroadcast = ch
+}
+
+// SetPreferencesRepo 注入用户偏好（合约删除时清理全站自选）
+func (h *SwapHandler) SetPreferencesRepo(r *repo.PreferencesRepo) {
+	h.preferencesRepo = r
+}
+
+func (h *SwapHandler) emitContractsChanged(productID, deliveryPeriod, action string) {
+	if h.contractBroadcast == nil || productID == "" {
+		return
+	}
+	select {
+	case h.contractBroadcast <- ContractsChangedEvent{
+		ProductID:      productID,
+		DeliveryPeriod: repo.NormalizeContractPeriod(deliveryPeriod),
+		Action:         action,
+	}:
+	default:
+		log.Warn().Str("product_id", productID).Msg("contractBroadcast 通道已满")
+	}
+}
+
+func (h *SwapHandler) onContractDeleted(ctx context.Context, productID, deliveryPeriod string) {
+	dp := repo.NormalizeContractPeriod(deliveryPeriod)
+	if h.preferencesRepo != nil {
+		key := repo.FavoriteContractKey(productID, dp)
+		if n, err := h.preferencesRepo.RemoveFavoriteKeyFromAll(ctx, key); err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("清理合约自选失败")
+		} else if n > 0 {
+			log.Info().Str("key", key).Int64("users", n).Msg("已从用户自选中移除已取消合约")
+		}
+	}
+	h.emitContractsChanged(productID, dp, "deleted")
 }
 
 // SetAfterCreateMatch 换盘创建后触发剩余单边与挂牌自动撮合
@@ -267,6 +319,16 @@ func (h *SwapHandler) Create(c *gin.Context) {
 	if req.SellQuantity != req.BuyQuantity {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "卖出和换入的数量必须一致"})
 		return
+	}
+
+	// 闭市检查：闭市期间拒绝发布换盘
+	if h.marketConfigRepo != nil {
+		if open, err := h.marketConfigRepo.IsMarketOpen(c.Request.Context()); err == nil && !open {
+			c.JSON(http.StatusForbidden, gin.H{"error": "市场已闭市，暂时无法发布换盘"})
+			return
+		} else if err != nil {
+			log.Error().Err(err).Msg("检查市场状态失败，继续处理")
+		}
 	}
 
 	ctx := c.Request.Context()
@@ -475,6 +537,30 @@ func (h *SwapHandler) Create(c *gin.Context) {
 		log.Error().Err(err).Msg("创建换盘挂牌失败")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建换盘失败"})
 		return
+	}
+
+	// 首次发布 → 建立卖出/换入两侧合约
+	if h.contractRepo != nil {
+		sellPeriod := ""
+		if sellDP != nil {
+			sellPeriod = *sellDP
+		}
+		buyPeriod := ""
+		if buyDP != nil {
+			buyPeriod = *buyDP
+		}
+		sellCreated, err1 := h.contractRepo.Ensure(ctx, req.SellProductID, sellPeriod, userID, nil)
+		if err1 != nil {
+			log.Warn().Err(err1).Msg("换盘卖出腿建立合约失败")
+		} else if sellCreated {
+			h.emitContractsChanged(req.SellProductID, sellPeriod, "created")
+		}
+		buyCreated, err2 := h.contractRepo.Ensure(ctx, req.BuyProductID, buyPeriod, userID, nil)
+		if err2 != nil {
+			log.Warn().Err(err2).Msg("换盘换入腿建立合约失败")
+		} else if buyCreated {
+			h.emitContractsChanged(req.BuyProductID, buyPeriod, "created")
+		}
 	}
 
 	swap.SellProductID = req.SellProductID
@@ -1157,11 +1243,13 @@ func (h *SwapHandler) Cancel(c *gin.Context) {
 	defer tx.Rollback(ctx)
 
 	// 行锁 + 撤盘：SELECT FOR UPDATE 确保 concurrent Match/Accept 不会同时修改
-	var productID string
+	var sellProductID, buyProductID string
+	var sellDP, buyDP *string
 	err = tx.QueryRow(ctx,
-		`SELECT sell_product_id FROM swap_listings WHERE id = $1 AND user_id = $2 AND status IN ('OPEN','SCHEDULED') FOR UPDATE`,
+		`SELECT sell_product_id, buy_product_id, sell_delivery_period, buy_delivery_period
+		 FROM swap_listings WHERE id = $1 AND user_id = $2 AND status IN ('OPEN','SCHEDULED') FOR UPDATE`,
 		swapID, userID,
-	).Scan(&productID)
+	).Scan(&sellProductID, &buyProductID, &sellDP, &buyDP)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "换盘不存在或无法撤销（可能已被成交）"})
 		return
@@ -1204,7 +1292,32 @@ func (h *SwapHandler) Cancel(c *gin.Context) {
 
 	// 实时推送：换盘撤盘事件，让其他用户及时刷新发盘列表
 	if h.listingBroadcast != nil {
-		h.listingBroadcast <- engine.ListingEvent{ProductID: productID}
+		h.listingBroadcast <- engine.ListingEvent{ProductID: sellProductID}
+		if buyProductID != "" && buyProductID != sellProductID {
+			h.listingBroadcast <- engine.ListingEvent{ProductID: buyProductID}
+		}
+	}
+
+	// 两侧合约：若无活跃引用则删除并通知自选刷新
+	if h.contractRepo != nil {
+		sellPeriod := ""
+		if sellDP != nil {
+			sellPeriod = *sellDP
+		}
+		buyPeriod := ""
+		if buyDP != nil {
+			buyPeriod = *buyDP
+		}
+		if deleted, err := h.contractRepo.TryDeleteIfUnused(ctx, sellProductID, sellPeriod); err != nil {
+			log.Warn().Err(err).Msg("换盘撤盘后删除卖出腿合约失败")
+		} else if deleted {
+			h.onContractDeleted(ctx, sellProductID, sellPeriod)
+		}
+		if deleted, err := h.contractRepo.TryDeleteIfUnused(ctx, buyProductID, buyPeriod); err != nil {
+			log.Warn().Err(err).Msg("换盘撤盘后删除换入腿合约失败")
+		} else if deleted {
+			h.onContractDeleted(ctx, buyProductID, buyPeriod)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "已撤销"})
@@ -1242,6 +1355,16 @@ func (h *SwapHandler) Match(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+
+	// 闭市检查：闭市期间拒绝换盘成交
+	if h.marketConfigRepo != nil {
+		if open, err := h.marketConfigRepo.IsMarketOpen(ctx); err == nil && !open {
+			c.JSON(http.StatusForbidden, gin.H{"error": "市场已闭市，暂时无法还盘成交"})
+			return
+		} else if err != nil {
+			log.Error().Err(err).Msg("检查市场状态失败，继续处理")
+		}
+	}
 
 	// 查询目标换盘
 	var swap SwapListing
@@ -2760,7 +2883,7 @@ func (h *SwapHandler) ExpireSwaps() {
 		    (expires_at IS NOT NULL AND expires_at <= NOW())
 		    OR (expires_at IS NULL AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'))
 		  )
-		RETURNING id, sell_product_id`)
+		RETURNING id, sell_product_id, buy_product_id, sell_delivery_period, buy_delivery_period`)
 	if err != nil {
 		log.Error().Err(err).Msg("执行过期换盘清理任务失败")
 		return
@@ -2768,15 +2891,32 @@ func (h *SwapHandler) ExpireSwaps() {
 	defer rows.Close()
 
 	products := make(map[string]struct{})
+	type contractKey struct{ productID, dp string }
+	pendingContracts := make(map[contractKey]struct{})
 	count := 0
 	for rows.Next() {
 		var id uuid.UUID
-		var productID string
-		if err := rows.Scan(&id, &productID); err != nil {
+		var sellPID, buyPID string
+		var sellDP, buyDP *string
+		if err := rows.Scan(&id, &sellPID, &buyPID, &sellDP, &buyDP); err != nil {
 			continue
 		}
 		count++
-		products[productID] = struct{}{}
+		products[sellPID] = struct{}{}
+		if buyPID != "" {
+			products[buyPID] = struct{}{}
+		}
+		sdp, bdp := "", ""
+		if sellDP != nil {
+			sdp = *sellDP
+		}
+		if buyDP != nil {
+			bdp = *buyDP
+		}
+		pendingContracts[contractKey{sellPID, sdp}] = struct{}{}
+		if buyPID != "" {
+			pendingContracts[contractKey{buyPID, bdp}] = struct{}{}
+		}
 		if h.coRepo != nil {
 			if _, err := h.coRepo.AutoCancelPending(ctx, "swap", id, "换盘已过期"); err != nil {
 				log.Error().Err(err).Str("swap_id", id.String()).Msg("过期换盘撤销关联商谈失败")
@@ -2789,6 +2929,15 @@ func (h *SwapHandler) ExpireSwaps() {
 	if h.listingBroadcast != nil {
 		for pid := range products {
 			h.listingBroadcast <- engine.ListingEvent{ProductID: pid}
+		}
+	}
+	if h.contractRepo != nil {
+		for k := range pendingContracts {
+			if deleted, err := h.contractRepo.TryDeleteIfUnused(ctx, k.productID, k.dp); err != nil {
+				log.Warn().Err(err).Str("product_id", k.productID).Str("dp", k.dp).Msg("换盘过期后尝试删除合约失败")
+			} else if deleted {
+				h.onContractDeleted(ctx, k.productID, k.dp)
+			}
 		}
 	}
 }

@@ -55,6 +55,9 @@ docker-compose.override.yml
 data/crawler/output/
 data/raw/
 data/processed/
+data/warehouse/**
+!data/warehouse/.gitkeep
+!data/warehouse/README.md
 logs/
 
 # ===== Build / deploy artifacts =====

@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -251,4 +252,30 @@ func (r *PreferencesRepo) UpsertPostingPref(ctx context.Context, userID uuid.UUI
 	}
 	normalizePreferences(p, favRaw, tvRaw, ppRaw, spRaw)
 	return p, nil
+}
+
+// FavoriteContractKey 自选键：productId:deliveryPeriod
+func FavoriteContractKey(productID, deliveryPeriod string) string {
+	return strings.TrimSpace(productID) + ":" + NormalizeContractPeriod(deliveryPeriod)
+}
+
+// RemoveFavoriteKeyFromAll 从所有用户自选中移除指定 productId:deliveryPeriod 键
+func (r *PreferencesRepo) RemoveFavoriteKeyFromAll(ctx context.Context, key string) (int64, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0, nil
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE user_preferences
+		SET favorites = COALESCE((
+			SELECT jsonb_agg(to_jsonb(x))
+			FROM jsonb_array_elements_text(COALESCE(favorites, '[]'::jsonb)) AS t(x)
+			WHERE x <> $1
+		), '[]'::jsonb),
+		    updated_at = NOW()
+		WHERE favorites @> to_jsonb($1::text)`, key)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

@@ -321,7 +321,7 @@ func (r *TradeRepo) GetLatestPrice(ctx context.Context, productID string, delive
 	args = append(args, periodArgs...)
 
 	todayStart := calendar.DayStart(time.Now())
-	prevStart := calendar.PrevWorkdayStart(todayStart)
+	prevStart := calendar.PrevWorkdayStartDB(ctx, todayStart)
 	prevEnd := prevStart.AddDate(0, 0, 1)
 
 	base := 2 + len(periodArgs)

@@ -47,16 +47,20 @@ func sanitizeString(s string, maxLen int) string {
 }
 
 type ListingHandler struct {
-	listingRepo      *repo.ListingRepo
-	eng              *engine.Engine
-	tradeRepo        *repo.TradeRepo
-	accountRepo      *repo.AccountRepo
-	coRepo           *repo.CounterOfferRepo
-	blacklistRepo    *repo.BlacklistRepo
-	broadcast        chan<- engine.Trade
-	listingBroadcast chan<- engine.ListingEvent
-	pool             *pgxpool.Pool
-	wsPush           func(targetUserID uuid.UUID, msgType string, payload interface{})
+	listingRepo       *repo.ListingRepo
+	eng               *engine.Engine
+	tradeRepo         *repo.TradeRepo
+	accountRepo       *repo.AccountRepo
+	coRepo            *repo.CounterOfferRepo
+	blacklistRepo     *repo.BlacklistRepo
+	marketConfigRepo  *repo.MarketConfigRepo
+	contractRepo      *repo.ProductContractRepo
+	preferencesRepo   *repo.PreferencesRepo
+	contractBroadcast chan<- ContractsChangedEvent
+	broadcast         chan<- engine.Trade
+	listingBroadcast  chan<- engine.ListingEvent
+	pool              *pgxpool.Pool
+	wsPush            func(targetUserID uuid.UUID, msgType string, payload interface{})
 }
 
 func NewListingHandler(listingRepo *repo.ListingRepo, eng *engine.Engine, tradeRepo *repo.TradeRepo, accountRepo *repo.AccountRepo, broadcast chan<- engine.Trade, listingBroadcast chan<- engine.ListingEvent) *ListingHandler {
@@ -78,6 +82,55 @@ func (h *ListingHandler) SetCounterOfferRepo(coRepo *repo.CounterOfferRepo) {
 // SetBlacklistRepo 注入黑名单 Repo（用于摘盘前检查 + 列表标记）
 func (h *ListingHandler) SetBlacklistRepo(blRepo *repo.BlacklistRepo) {
 	h.blacklistRepo = blRepo
+}
+
+// SetMarketConfigRepo 注入市场配置 Repo（用于闭市时拒绝新挂牌/摘盘）
+func (h *ListingHandler) SetMarketConfigRepo(mcRepo *repo.MarketConfigRepo) {
+	h.marketConfigRepo = mcRepo
+}
+
+// SetContractRepo 注入品种合约 Repo（首次发布建立合约）
+func (h *ListingHandler) SetContractRepo(r *repo.ProductContractRepo) {
+	h.contractRepo = r
+}
+
+// SetContractBroadcast 注入合约变更广播
+func (h *ListingHandler) SetContractBroadcast(ch chan<- ContractsChangedEvent) {
+	h.contractBroadcast = ch
+}
+
+// SetPreferencesRepo 注入用户偏好（合约删除时清理全站自选）
+func (h *ListingHandler) SetPreferencesRepo(r *repo.PreferencesRepo) {
+	h.preferencesRepo = r
+}
+
+func (h *ListingHandler) emitContractsChanged(productID, deliveryPeriod, action string) {
+	if h.contractBroadcast == nil || productID == "" {
+		return
+	}
+	select {
+	case h.contractBroadcast <- ContractsChangedEvent{
+		ProductID:      productID,
+		DeliveryPeriod: repo.NormalizeContractPeriod(deliveryPeriod),
+		Action:         action,
+	}:
+	default:
+		log.Warn().Str("product_id", productID).Msg("contractBroadcast 通道已满")
+	}
+}
+
+// onContractDeleted 清理全站自选并广播 deleted
+func (h *ListingHandler) onContractDeleted(ctx context.Context, productID, deliveryPeriod string) {
+	dp := repo.NormalizeContractPeriod(deliveryPeriod)
+	if h.preferencesRepo != nil {
+		key := repo.FavoriteContractKey(productID, dp)
+		if n, err := h.preferencesRepo.RemoveFavoriteKeyFromAll(ctx, key); err != nil {
+			log.Warn().Err(err).Str("key", key).Msg("清理合约自选失败")
+		} else if n > 0 {
+			log.Info().Str("key", key).Int64("users", n).Msg("已从用户自选中移除已取消合约")
+		}
+	}
+	h.emitContractsChanged(productID, dp, "deleted")
 }
 
 // SetPool 注入数据库连接池（用于 #697-6 普通挂牌→换盘锁单撮合查询）
@@ -145,6 +198,16 @@ func listingStatusFromEngine(s engine.OrderStatus) repo.ListingStatus {
 func (h *ListingHandler) Create(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 
+	// 闭市检查：闭市期间拒绝新挂牌
+	if h.marketConfigRepo != nil {
+		if open, err := h.marketConfigRepo.IsMarketOpen(c.Request.Context()); err == nil && !open {
+			c.JSON(http.StatusForbidden, gin.H{"error": "市场已闭市，暂时无法发布新挂牌"})
+			return
+		} else if err != nil {
+			log.Error().Err(err).Msg("检查市场状态失败，继续处理")
+		}
+	}
+
 	var req CreateListingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -163,6 +226,21 @@ func (h *ListingHandler) Create(c *gin.Context) {
 		log.Error().Err(err).Msg("创建挂牌失败")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建挂牌失败"})
 		return
+	}
+
+	// 首次发布该品种+交割期 → 正式建立合约
+	if h.contractRepo != nil {
+		dp := ""
+		if listing.DeliveryPeriod != nil {
+			dp = *listing.DeliveryPeriod
+		}
+		lid := listing.ID
+		if created, err := h.contractRepo.Ensure(ctx, listing.ProductID, dp, userID, &lid); err != nil {
+			log.Warn().Err(err).Str("product_id", listing.ProductID).Str("dp", dp).Msg("建立合约失败（不影响挂盘）")
+		} else if created {
+			log.Info().Str("product_id", listing.ProductID).Str("delivery_period", repo.NormalizeContractPeriod(dp)).Msg("新合约已建立")
+			h.emitContractsChanged(listing.ProductID, dp, "created")
+		}
 	}
 
 	// 冻结保证金（买方和卖方都需要冻结；定时盘也预先冻结）
@@ -260,6 +338,16 @@ func (h *ListingHandler) Take(c *gin.Context) {
 		if dir || rev {
 			c.JSON(http.StatusForbidden, gin.H{"error": "已拉黑该用户，无法摘盘"})
 			return
+		}
+	}
+
+	// 闭市检查：闭市期间拒绝摘盘
+	if h.marketConfigRepo != nil {
+		if open, err := h.marketConfigRepo.IsMarketOpen(ctx); err == nil && !open {
+			c.JSON(http.StatusForbidden, gin.H{"error": "市场已闭市，暂时无法摘盘"})
+			return
+		} else if err != nil {
+			log.Error().Err(err).Msg("检查市场状态失败，继续处理")
 		}
 	}
 
@@ -401,6 +489,19 @@ func (h *ListingHandler) Take(c *gin.Context) {
 			} else if count > 0 {
 				log.Info().Int64("count", count).Str("listing_id", targetID.String()).Msg("摘盘成交自动撤销关联 PENDING 议价")
 			}
+		}
+	}
+
+	// 成交后若该合约已无活跃盘，删除并通知自选
+	if h.contractRepo != nil {
+		dp := ""
+		if target.DeliveryPeriod != nil {
+			dp = *target.DeliveryPeriod
+		}
+		if deleted, err := h.contractRepo.TryDeleteIfUnused(ctx, target.ProductID, dp); err != nil {
+			log.Warn().Err(err).Str("product_id", target.ProductID).Str("dp", dp).Msg("摘盘后尝试删除合约失败")
+		} else if deleted {
+			h.onContractDeleted(ctx, target.ProductID, dp)
 		}
 	}
 
@@ -1134,6 +1235,20 @@ func (h *ListingHandler) Cancel(c *gin.Context) {
 		h.listingBroadcast <- engine.ListingEvent{ProductID: listing.ProductID}
 	}
 
+	// 若该品种+交割期已无活跃发盘/换盘，删除合约并通知自选刷新
+	if h.contractRepo != nil {
+		dp := ""
+		if listing.DeliveryPeriod != nil {
+			dp = *listing.DeliveryPeriod
+		}
+		if deleted, err := h.contractRepo.TryDeleteIfUnused(ctx, listing.ProductID, dp); err != nil {
+			log.Warn().Err(err).Str("product_id", listing.ProductID).Str("dp", dp).Msg("尝试删除未使用合约失败")
+		} else if deleted {
+			log.Info().Str("product_id", listing.ProductID).Str("delivery_period", repo.NormalizeContractPeriod(dp)).Msg("合约已删除（无活跃引用）")
+			h.onContractDeleted(ctx, listing.ProductID, dp)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "撤盘成功"})
 }
 
@@ -1150,6 +1265,8 @@ func (h *ListingHandler) ExpireListings() {
 	}
 	log.Info().Int("count", len(expired)).Msg("过期挂牌已标记为 EXPIRED")
 	products := make(map[string]struct{})
+	type contractKey struct{ productID, dp string }
+	pendingContracts := make(map[contractKey]struct{})
 	for _, e := range expired {
 		h.eng.CancelOrder(e.ProductID, e.ID.String())
 		if h.accountRepo != nil {
@@ -1163,10 +1280,24 @@ func (h *ListingHandler) ExpireListings() {
 			}
 		}
 		products[e.ProductID] = struct{}{}
+		dp := ""
+		if e.DeliveryPeriod != nil {
+			dp = *e.DeliveryPeriod
+		}
+		pendingContracts[contractKey{e.ProductID, dp}] = struct{}{}
 	}
 	if h.listingBroadcast != nil {
 		for pid := range products {
 			h.listingBroadcast <- engine.ListingEvent{ProductID: pid}
+		}
+	}
+	if h.contractRepo != nil {
+		for k := range pendingContracts {
+			if deleted, err := h.contractRepo.TryDeleteIfUnused(ctx, k.productID, k.dp); err != nil {
+				log.Warn().Err(err).Str("product_id", k.productID).Str("dp", k.dp).Msg("过期后尝试删除合约失败")
+			} else if deleted {
+				h.onContractDeleted(ctx, k.productID, k.dp)
+			}
 		}
 	}
 }
