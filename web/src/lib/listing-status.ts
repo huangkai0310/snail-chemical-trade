@@ -9,7 +9,7 @@ export function formatListingStatus(status: string, filled = 0): string {
     case "FILLED":
       return "已成交";
     case "CANCELLED":
-      return "已撤盘";
+      return filled > 0 ? "已撤盘（部分成交）" : "已撤盘";
     case "EXPIRED":
       return filled > 0 ? "已过期（部分成交）" : "已过期";
     case "SCHEDULED":
@@ -32,8 +32,10 @@ export function formatSwapBoardStatus(
   switch (status) {
     case "MATCHED":
       return "已成交";
-    case "CANCELLED":
-      return "已撤盘";
+    case "CANCELLED": {
+      const partial = (opts?.sellFilled ?? 0) > 0 || (opts?.buyFilled ?? 0) > 0;
+      return partial ? "已撤盘（部分成交）" : "已撤盘";
+    }
     case "EXPIRED": {
       const partial = (opts?.sellFilled ?? 0) > 0 || (opts?.buyFilled ?? 0) > 0;
       return partial ? "已过期（部分成交）" : "已过期";

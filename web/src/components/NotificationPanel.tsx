@@ -121,6 +121,8 @@ export default function NotificationPanel({ open, onClose }: Props) {
     } else if (n.type === "listing_taken" || n.type === "listing_expire_soon" || n.type === "listing_publish_soon" || n.type === "swap_lock_received" || n.type === "swap_lock_cancelled") {
       // 挂牌/换盘相关 → 我的挂牌
       router.push("/my?tab=listings");
+    } else if (n.type === "contract_cancelled") {
+      router.push("/trading");
     }
   };
 

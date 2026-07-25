@@ -22,7 +22,16 @@ import {
   type QtyMode,
 } from "@/lib/qty-mode";
 import QtyModeFields from "./QtyModeFields";
-import { defaultExpiresAtLocal, defaultStartsAtLocal, isoToDatetimeLocal, toDatetimeLocalValue } from "@/lib/expires";
+import {
+  defaultExpiresAtLocal,
+  defaultStartsAtLocal,
+  isoToDatetimeLocal,
+  isWorkdayDateTimeLocal,
+  nextWorkdayExpireLocal,
+  nextWorkdayMorningLocal,
+} from "@/lib/expires";
+import DeliveryPeriodPicker from "./DeliveryPeriodPicker";
+import WorkdayDateTimePicker from "./WorkdayDateTimePicker";
 
 export interface EditListingFormData {
   price: string;
@@ -152,31 +161,6 @@ interface Props {
   onBack?: () => void;
 }
 
-function buildDeliveryOptions(): string[] {
-  const options: string[] = ["现货"];
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-
-  const startYear = now.getFullYear();
-  const startMonth = now.getMonth();
-
-  for (let offset = 0; offset <= 12; offset++) {
-    const totalMonths = startMonth + offset;
-    const year = startYear + Math.floor(totalMonths / 12);
-    const month = totalMonths % 12;
-    const yy = String(year).slice(-2);
-    const mm = String(month + 1).padStart(2, "0");
-    const prefix = `${yy}${mm}`;
-
-    const midDate = new Date(year, month, 15);
-    const endDate = new Date(year, month, 28);
-
-    if (midDate >= now) options.push(`${prefix}中`);
-    if (endDate >= now) options.push(`${prefix}下`);
-  }
-  return options;
-}
-
 function listingToForm(listing: Listing): EditListingFormData {
   // 解析 negotiable_terms（JSONB 传到前端可能被序列化成 string 或已是数组）
   let nt: string[] = [];
@@ -228,7 +212,6 @@ function listingToForm(listing: Listing): EditListingFormData {
 export default function EditListingModal({ open, listing, product, loading, dataUpdated, updateMessage, onDismissUpdate, onClose, onSubmit, onBack }: Props) {
   const [form, setForm] = useState<EditListingFormData | null>(null);
   const [minQtyError, setMinQtyError] = useState("");
-  const deliveryOptions = buildDeliveryOptions();
   const prevPaymentRef = useRef("");
 
   const pendingCoQuery = useQuery({
@@ -338,7 +321,16 @@ export default function EditListingModal({ open, listing, product, loading, data
     if (!submitData.delivery_method) missingFields.push("交割方式");
     if (!submitData.payment_method) missingFields.push("付款方式");
     if (!submitData.specs) missingFields.push("规格");
-    if (missingFields.length > 0) return;
+    if (!isWorkdayDateTimeLocal(submitData.starts_at, true)) {
+      missingFields.push("开始时间（须为工作日；休市日不可立即挂盘）");
+    }
+    if (!isWorkdayDateTimeLocal(submitData.expires_at)) {
+      missingFields.push("过期时间（须为工作日）");
+    }
+    if (missingFields.length > 0) {
+      toast(`还需填写：${missingFields.join("、")}`, "error");
+      return;
+    }
 
     // 安全性检查：防止 XSS 注入
     const allTextFields = [submitData.delivery_period, submitData.delivery_location, submitData.delivery_method, submitData.payment_method, submitData.specs];
@@ -380,6 +372,12 @@ export default function EditListingModal({ open, listing, product, loading, data
   if (!form.delivery_method) displayMissingFields.push("交割方式");
   if (!form.payment_method) displayMissingFields.push("付款方式");
   if (!form.specs) displayMissingFields.push("规格");
+  if (!isWorkdayDateTimeLocal(form.starts_at, true)) {
+    displayMissingFields.push("开始时间（须为工作日）");
+  }
+  if (!isWorkdayDateTimeLocal(form.expires_at)) {
+    displayMissingFields.push("过期时间（须为工作日）");
+  }
   const isValid = displayMissingFields.length === 0;
 
   const defaultFreeStorageDays = formTotalQty(form) >= 100 ? 7 : 3;
@@ -489,17 +487,11 @@ export default function EditListingModal({ open, listing, product, loading, data
           {/* 交割期 */}
           <div>
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">交割期</label>
-            <input
-              type="text"
+            <DeliveryPeriodPicker
               value={form.delivery_period}
-              onChange={(e) => update("delivery_period", sanitizeText(e.target.value))}
-              list="edit-delivery-period-options"
-              placeholder="选择或输入交割期"
-              className="w-full px-3 py-2.5 border border-t-border rounded-lg text-sm bg-t-panel text-t-text focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
+              onChange={(v) => update("delivery_period", v)}
+              placeholder="在日历中选择交割期"
             />
-            <datalist id="edit-delivery-period-options">
-              {deliveryOptions.map((o) => <option key={o} value={o} />)}
-            </datalist>
           </div>
 
           {/* 交割地 */}
@@ -665,14 +657,17 @@ export default function EditListingModal({ open, listing, product, loading, data
           <div>
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">
               开始时间
-              <span className="ml-2 text-xs font-normal text-t-text-3">空=立即发布</span>
+              <span className="ml-2 text-xs font-normal text-t-text-3">仅工作日；空=立即发布</span>
             </label>
-            <input
-              type="datetime-local"
+            <WorkdayDateTimePicker
               value={form.starts_at}
-              onChange={(e) => update("starts_at", e.target.value)}
+              onChange={(v) => update("starts_at", v)}
+              allowEmpty
+              emptyLabel="立即发布"
+              placeholder="选择开始时间"
+              accent="sky"
+              defaultTime="09:00"
               disabled={termsLockedByCo}
-              className="w-full px-3 py-2.5 border border-sky-400/60 rounded-lg text-sm bg-sky-50/50 dark:bg-sky-950/20 text-t-text focus:ring-2 focus:ring-sky-400 focus:border-sky-500 outline-none disabled:opacity-50"
             />
             <div className="mt-1.5 flex flex-wrap gap-2">
               <button
@@ -686,14 +681,10 @@ export default function EditListingModal({ open, listing, product, loading, data
               <button
                 type="button"
                 disabled={termsLockedByCo}
-                onClick={() => {
-                  const now = new Date();
-                  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
-                  update("starts_at", toDatetimeLocalValue(d));
-                }}
+                onClick={() => update("starts_at", nextWorkdayMorningLocal())}
                 className="text-xs px-2 py-1 rounded border border-t-border text-t-text-2 hover:bg-t-hover disabled:opacity-40"
               >
-                明日9:00
+                下一工作日9:00
               </button>
             </div>
           </div>
@@ -702,14 +693,15 @@ export default function EditListingModal({ open, listing, product, loading, data
           <div>
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">
               过期时间
-              <span className="ml-2 text-xs font-normal text-t-text-3">可修改</span>
+              <span className="ml-2 text-xs font-normal text-t-text-3">仅工作日</span>
             </label>
-            <input
-              type="datetime-local"
+            <WorkdayDateTimePicker
               value={form.expires_at}
-              onChange={(e) => update("expires_at", e.target.value)}
+              onChange={(v) => update("expires_at", v)}
+              placeholder="选择过期时间"
+              accent="amber"
+              defaultTime="18:00"
               disabled={termsLockedByCo}
-              className="w-full px-3 py-2.5 border border-amber-400/60 rounded-lg text-sm bg-amber-50/50 dark:bg-amber-950/20 text-t-text focus:ring-2 focus:ring-amber-400 focus:border-amber-500 outline-none disabled:opacity-50"
             />
             <div className="mt-1.5 flex flex-wrap gap-2">
               <button
@@ -718,19 +710,15 @@ export default function EditListingModal({ open, listing, product, loading, data
                 onClick={() => update("expires_at", defaultExpiresAtLocal())}
                 className="text-xs px-2 py-1 rounded border border-amber-400/50 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 disabled:opacity-40"
               >
-                当日18:00
+                默认18:00
               </button>
               <button
                 type="button"
                 disabled={termsLockedByCo}
-                onClick={() => {
-                  const now = new Date();
-                  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 18, 0, 0, 0);
-                  update("expires_at", toDatetimeLocalValue(d));
-                }}
+                onClick={() => update("expires_at", nextWorkdayExpireLocal())}
                 className="text-xs px-2 py-1 rounded border border-t-border text-t-text-2 hover:bg-t-hover disabled:opacity-40"
               >
-                次日18:00
+                下一工作日18:00
               </button>
               <button
                 type="button"

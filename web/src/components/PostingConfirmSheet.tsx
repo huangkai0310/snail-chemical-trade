@@ -34,7 +34,12 @@ export function specsText(specs?: string | Record<string, unknown> | null): stri
 
 function periodText(p?: string | null): string {
   if (!p?.trim()) return "现货";
-  return p;
+  const v = p.trim();
+  if (v === "现货") return "现货";
+  if (/^\d{4}中$|^\d{4}下$/.test(v)) return v;
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (ymd) return `${ymd[1].slice(-2)}${ymd[2]}${ymd[3]}`;
+  return v;
 }
 
 function Row({ label, value, strong }: { label: string; value: ReactNode; strong?: boolean }) {
@@ -163,7 +168,7 @@ export function ListingConfirmSheet(p: ListingConfirmSheetProps) {
         <Row label="数量" value={`${Math.floor(p.quantity).toLocaleString()} 吨`} strong />
         <Row label="数量方式" value={qtyMode} />
         {p.allowPartial && <Row label="每份" value={minQty} />}
-        <Row label="交割期" value={p.deliveryPeriod || "现货"} />
+        <Row label="交割期" value={periodText(p.deliveryPeriod)} />
         <Row label="交割地" value={p.deliveryLocation} />
         <Row label="交割方式" value={p.deliveryMethod} />
         <Row label="付款方式" value={p.paymentMethod} />

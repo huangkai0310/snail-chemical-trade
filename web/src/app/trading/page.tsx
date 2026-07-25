@@ -15,6 +15,7 @@ import TakeListingModal from "@/components/TakeListingModal";
 import TakeSwapModal from "@/components/TakeSwapModal";
 import CounterOfferModal from "@/components/CounterOfferModal";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import PanelResizeHandle from "@/components/PanelResizeHandle";
 import { toast } from "@/components/Toast";
 import { useAuthStore } from "@/lib/auth-store";
 import {
@@ -44,6 +45,57 @@ import { describeEntityUpdate, hasEditorialEntityUpdate } from "@/lib/entity-cha
 import { findPairedSwapCounterOffer } from "@/lib/swap-counter-offer";
 import { shouldSuppressListingToast, suppressOwnListingToast } from "@/lib/listing-toast-suppress";
 import { persistTradingView } from "@/components/PreferencesSync";
+import { formatDeliveryPeriodDisplay } from "@/lib/delivery-period";
+
+const LAYOUT_STORAGE_KEY = "trading_layout_sizes_v1";
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 420;
+const SIDEBAR_DEFAULT = 220;
+const MARKET_MIN = 220;
+const MARKET_MAX = 520;
+const MARKET_DEFAULT = 300;
+const LISTING_MIN = 160;
+const LISTING_DEFAULT_VH = 0.38;
+
+type LayoutSizes = {
+  sidebarWidth: number;
+  marketWidth: number;
+  listingHeight: number | null; // null = 用默认 vh，首次拖动后固定为 px
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function loadLayoutSizes(): LayoutSizes {
+  if (typeof window === "undefined") {
+    return { sidebarWidth: SIDEBAR_DEFAULT, marketWidth: MARKET_DEFAULT, listingHeight: null };
+  }
+  try {
+    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (!raw) return { sidebarWidth: SIDEBAR_DEFAULT, marketWidth: MARKET_DEFAULT, listingHeight: null };
+    const parsed = JSON.parse(raw) as Partial<LayoutSizes>;
+    return {
+      sidebarWidth: clamp(Number(parsed.sidebarWidth) || SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX),
+      marketWidth: clamp(Number(parsed.marketWidth) || MARKET_DEFAULT, MARKET_MIN, MARKET_MAX),
+      listingHeight:
+        typeof parsed.listingHeight === "number" && parsed.listingHeight > 0
+          ? parsed.listingHeight
+          : null,
+    };
+  } catch {
+    return { sidebarWidth: SIDEBAR_DEFAULT, marketWidth: MARKET_DEFAULT, listingHeight: null };
+  }
+}
+
+function saveLayoutSizes(sizes: LayoutSizes) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(sizes));
+  } catch {
+    /* ignore */
+  }
+}
 
 /** 从 PriceCandle[] 生成 Lightweight Charts K线数据 */
 function toCandlestickData(candles: PriceCandle[]): CandlestickData[] {
@@ -123,6 +175,26 @@ export default function TradingPage() {
   const [chartVisible, setChartVisible] = useState(true);
   const [marketPanelVisible, setMarketPanelVisible] = useState(true);
   const [listingPanelVisible, setListingPanelVisible] = useState(true);
+  // 面板尺寸（可拖拽调整，本地记忆）
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [marketWidth, setMarketWidth] = useState(MARKET_DEFAULT);
+  const [listingHeight, setListingHeight] = useState<number | null>(null);
+  const [layoutHydrated, setLayoutHydrated] = useState(false);
+  const mainColumnRef = useRef<HTMLDivElement>(null);
+  const [isResizing, setIsResizing] = useState(false);
+
+  useEffect(() => {
+    const s = loadLayoutSizes();
+    setSidebarWidth(s.sidebarWidth);
+    setMarketWidth(s.marketWidth);
+    setListingHeight(s.listingHeight);
+    setLayoutHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!layoutHydrated) return;
+    saveLayoutSizes({ sidebarWidth, marketWidth, listingHeight });
+  }, [layoutHydrated, sidebarWidth, marketWidth, listingHeight]);
 
   // 弹窗状态
   const [modalOpen, setModalOpen] = useState(false);
@@ -475,7 +547,7 @@ export default function TradingPage() {
 
   const historyQuery = useQuery<PriceCandle[]>({
     queryKey: ["priceHistory", productId, chartInterval, deliveryPeriod],
-    queryFn: () => fetchPriceHistory(productId, chartInterval, 200, deliveryPeriod),
+    queryFn: () => fetchPriceHistory(productId, chartInterval, 200, deliveryPeriod, "exchange"),
     staleTime: 30_000,
     enabled: isAuthenticated,
   });
@@ -529,11 +601,42 @@ export default function TradingPage() {
     [productId, invalidateTrading, queryClient, syncOpenModalsFromCache]
   );
 
+  const handleWSMarketStatus = useCallback(
+    (data: { market_open: boolean; reason?: string }) => {
+      queryClient.setQueryData(["marketStatus"], {
+        market_open: data.market_open,
+        reason: data.reason ?? "",
+      });
+      setTradeToast(data.market_open ? "市场已开市" : "市场已休市");
+    },
+    [queryClient]
+  );
+
+  const handleWSContractsChanged = useCallback(
+    (data: { product_id: string; delivery_period?: string; action?: string }) => {
+      if (!data?.product_id) return;
+      queryClient.invalidateQueries({ queryKey: ["contracts", data.product_id] });
+      queryClient.invalidateQueries({ queryKey: ["contracts"] });
+      if (data.action === "deleted") {
+        const dp = (data.delivery_period || "现货").trim() || "现货";
+        // 当前正在看该合约时切回现货（自选移除与提示由 GlobalNotificationListener 处理）
+        setDeliveryPeriod((cur) => {
+          if (productId !== data.product_id) return cur;
+          const curDp = (cur || "现货").trim() || "现货";
+          return curDp === dp ? "现货" : cur;
+        });
+      }
+    },
+    [queryClient, productId]
+  );
+
   // WebSocket — 仅刷新数据，Toast 和通知写入由 GlobalNotificationListener 统一处理
   // 乐观更新：对方接受/拒绝/撤销商谈时，立即从 pending 缓存中移除，UI 即时反映
   useTradeWS({
     onTrade: handleWSTrade,
     onNewListing: handleWSNewListing,
+    onMarketStatus: handleWSMarketStatus,
+    onContractsChanged: handleWSContractsChanged,
     onCounterOfferReceived: () => {
       queryClient.invalidateQueries({ queryKey: ["counterOffers"] });
     },
@@ -1274,25 +1377,40 @@ export default function TradingPage() {
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* WatchList 侧边栏 */}
         <aside
-          className={`relative flex flex-col border-r shrink-0 overflow-hidden transition-all duration-300 group/sidebar
-            ${sidebarOpen ? "w-[220px]" : "w-0 border-r-0"}`}
-          style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-secondary)" }}
+          className={`relative flex flex-col border-r shrink-0 overflow-hidden group/sidebar
+            ${sidebarOpen ? "" : "w-0 border-r-0"}
+            ${isResizing ? "" : "transition-[width] duration-200"}`}
+          style={{
+            borderColor: "var(--border-subtle)",
+            backgroundColor: "var(--bg-secondary)",
+            width: sidebarOpen ? sidebarWidth : 0,
+          }}
         >
           {sidebarOpen && (
-            <>
-              <WatchList
-                products={products}
-                selectedId={productId}
-                selectedDeliveryPeriod={deliveryPeriod}
-                onSelect={(id, dp) => {
-                  setProductId(id);
-                  setDeliveryPeriod(dp?.trim() ? dp : "现货");
-                }}
-                onCollapse={() => setSidebarOpen(false)}
-              />
-            </>
+            <WatchList
+              products={products}
+              selectedId={productId}
+              selectedDeliveryPeriod={deliveryPeriod}
+              onSelect={(id, dp) => {
+                setProductId(id);
+                setDeliveryPeriod(dp?.trim() ? dp : "现货");
+              }}
+              onCollapse={() => setSidebarOpen(false)}
+            />
           )}
         </aside>
+
+        {sidebarOpen && (
+          <PanelResizeHandle
+            axis="x"
+            title="拖动调整自选栏宽度"
+            onDragStart={() => setIsResizing(true)}
+            onDragEnd={() => setIsResizing(false)}
+            onDrag={(delta) => {
+              setSidebarWidth((w) => clamp(w + delta, SIDEBAR_MIN, SIDEBAR_MAX));
+            }}
+          />
+        )}
 
         {/* 侧边栏收起后的展开按钮 */}
         {!sidebarOpen && (
@@ -1309,223 +1427,418 @@ export default function TradingPage() {
         )}
 
         {/* 主内容 */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* K线 + 盘口 — K线隐藏后只保留盘口（固定高度），挂盘填满剩余空间 */}
-          <div className={`flex overflow-hidden p-1.5 gap-1.5 ${chartVisible ? "min-h-0 flex-1" : "shrink-0 h-[320px]"}`}
-          >
-            {/* K线图 — 主体区域 */}
-            {chartVisible ? (
-              <div className="relative flex-1 min-w-0 overflow-hidden bg-t-panel rounded-lg shadow-panel flex flex-col group/chart">
-                {/* K线标题栏：品种名 + 周期 + 收起按钮 */}
-                <div className="flex items-center h-9 px-3 border-b shrink-0"
-                  style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-secondary)" }}
+        <div ref={mainColumnRef} className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {chartVisible ? (
+            <>
+              {/* ===== K线展开：上 K线+盘口，下发盘 ===== */}
+              <div className="flex overflow-hidden p-1.5 gap-0 min-h-0 flex-1">
+                <div className="relative flex-1 min-w-0 overflow-hidden bg-t-panel rounded-lg shadow-panel flex flex-col group/chart">
+                  <div className="flex items-center h-9 px-3 border-b shrink-0"
+                    style={{ borderColor: "var(--border-subtle)", backgroundColor: "var(--bg-secondary)" }}
+                  >
+                    <span className="text-sm font-semibold text-t-text">{selectedProduct?.name ?? productId}</span>
+                    <span className="mx-2 text-t-text-3">·</span>
+                    <span className="text-xs text-t-text-2">
+                      {ALL_INTERVALS.find(i => i.key === chartInterval)?.label ?? chartInterval}
+                    </span>
+                    {deliveryPeriod && (
+                      <>
+                        <span className="mx-2 text-t-text-3">·</span>
+                        <span className={`text-xs font-medium ${
+                          deliveryPeriod === "现货" || deliveryPeriod.trim() === ""
+                            ? "text-status-warning"
+                            : "text-status-info"
+                        }`}>
+                          {formatDeliveryPeriodDisplay(deliveryPeriod)}
+                        </span>
+                      </>
+                    )}
+                    <button
+                      onClick={() => setChartVisible(false)}
+                      className="ml-auto w-6 h-6 flex items-center justify-center rounded-md bg-t-hover/80 text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all"
+                      title="收起K线图"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7M5 21l7-7 7 7" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <TradingViewChart
+                      productId={productId}
+                      productName={selectedProduct?.name ?? ""}
+                      data={candleData}
+                      volumeData={volData}
+                      turnoverData={turnoverData}
+                      ma5Data={ma5Data}
+                      ma10Data={ma10Data}
+                      ma20Data={ma20Data}
+                      ma30Data={ma30Data}
+                      chartType={chartInterval === "time" ? "line" : "candle"}
+                      loading={historyQuery.isLoading}
+                    />
+                  </div>
+                </div>
+
+                {marketPanelVisible && (
+                  <PanelResizeHandle
+                    axis="x"
+                    title="拖动调整盘口宽度"
+                    className="mx-0.5"
+                    onDrag={(delta) => {
+                      setMarketWidth((w) => clamp(w - delta, MARKET_MIN, MARKET_MAX));
+                    }}
+                  />
+                )}
+
+                {marketPanelVisible ? (
+                  <div
+                    className="relative shrink-0 flex flex-col overflow-y-auto group/market"
+                    style={{ width: marketWidth }}
+                  >
+                    <div className="flex-1 bg-t-panel rounded-lg shadow-panel flex flex-col">
+                      <MarketSummaryPanel
+                        productId={productId}
+                        productName={selectedProduct?.name || productId}
+                        deliveryPeriod={deliveryPeriod}
+                        unit={unit}
+                        onCollapse={() => setMarketPanelVisible(false)}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setMarketPanelVisible(true)}
+                    className="shrink-0 w-9 flex flex-col items-center justify-center gap-2 bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all py-2 h-full ml-1.5"
+                    title="展开盘口"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M6 5l7 7-7 7" />
+                    </svg>
+                    <span className="text-[10px] text-t-text-3" style={{ writingMode: "vertical-rl", letterSpacing: "0.1em" }}>展开盘口</span>
+                  </button>
+                )}
+              </div>
+
+              {listingPanelVisible && (
+                <PanelResizeHandle
+                  axis="y"
+                  title="拖动调整发盘列表高度"
+                  className="mx-1.5"
+                  onDrag={(delta) => {
+                    setListingHeight((prev) => {
+                      const col = mainColumnRef.current;
+                      const colH = col?.clientHeight ?? window.innerHeight;
+                      const current = prev ?? Math.round(colH * LISTING_DEFAULT_VH);
+                      const maxH = Math.max(LISTING_MIN, colH - 140);
+                      return clamp(current - delta, LISTING_MIN, maxH);
+                    });
+                  }}
+                />
+              )}
+
+              {listingPanelVisible ? (
+                <div
+                  className="relative px-1.5 pb-1.5 group/listing shrink-0"
+                  style={{
+                    height:
+                      listingHeight ??
+                      `calc(${Math.round(LISTING_DEFAULT_VH * 100)}vh)`,
+                  }}
                 >
-                  <span className="text-sm font-semibold text-t-text">{selectedProduct?.name ?? productId}</span>
-                  <span className="mx-2 text-t-text-3">·</span>
-                  <span className="text-xs text-t-text-2">
-                    {ALL_INTERVALS.find(i => i.key === chartInterval)?.label ?? chartInterval}
-                  </span>
-                  {/* 交割期标签：现货交割=黄色，其他=蓝色 */}
-                  {deliveryPeriod && (
-                    <>
-                      <span className="mx-2 text-t-text-3">·</span>
-                      <span className={`text-xs font-medium ${
-                        deliveryPeriod === "现货" || deliveryPeriod.trim() === ""
-                          ? "text-status-warning"
-                          : "text-status-info"
-                      }`}>
-                        {deliveryPeriod}
-                      </span>
-                    </>
-                  )}
-              {/* 收起K线按钮 */}
-              <button
-                onClick={() => setChartVisible(false)}
-                className="ml-auto w-6 h-6 flex items-center justify-center rounded-md bg-t-hover/80 text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all"
-                title="收起K线图"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7M5 21l7-7 7 7" />
-                </svg>
-              </button>
-                </div>
-                <div className="flex-1 min-h-0">
-                  <TradingViewChart
+                  <ListingPanel
                     productId={productId}
-                    productName={selectedProduct?.name ?? ""}
-                    data={candleData}
-                    volumeData={volData}
-                    turnoverData={turnoverData}
-                    ma5Data={ma5Data}
-                    ma10Data={ma10Data}
-                    ma20Data={ma20Data}
-                    ma30Data={ma30Data}
-                    chartType={chartInterval === "time" ? "line" : "candle"}
-                    loading={historyQuery.isLoading}
-                  />
-                </div>
-              </div>
-            ) : (
-              /* K线收起后的展开按钮 */
-              <button
-                onClick={() => setChartVisible(true)}
-                className="shrink-0 w-9 flex flex-col items-center justify-center gap-2 bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all py-2 h-full"
-                title="展开K线图"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7M19 3l-7 7-7-7" />
-                </svg>
-                <span className="text-[10px] text-t-text-3" style={{ writingMode: "vertical-rl", letterSpacing: "0.1em" }}>展开K线</span>
-              </button>
-            )}
-
-            {/* 盘口 */}
-            {marketPanelVisible ? (
-              <div className="relative w-[300px] shrink-0 flex flex-col overflow-y-auto group/market">
-                <div className="flex-1 bg-t-panel rounded-lg shadow-panel flex flex-col">
-                  <MarketSummaryPanel
-                    productId={productId}
-                    productName={selectedProduct?.name || productId}
-                    deliveryPeriod={deliveryPeriod}
+                    products={products.map(p => ({ id: p.id, name: p.name }))}
                     unit={unit}
-                    onCollapse={() => setMarketPanelVisible(false)}
+                    canTrade={true}
+                    currentUserId={user?.id}
+                    defaultDeliveryPeriod={deliveryPeriod}
+                    marketType={marketType}
+                    onTake={(listing) => {
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setCounterOfferTarget(null);
+                      setEditCounterOfferTarget(null);
+                      setEditListingTarget(null);
+                      setEditSwapTarget(null);
+                      setSwapTarget(null);
+                      setTakeTarget(listing);
+                    }}
+                    onTakeSwap={(swap, mode, flashMatch) => {
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setCounterOfferTarget(null);
+                      setEditCounterOfferTarget(null);
+                      setEditListingTarget(null);
+                      setEditSwapTarget(null);
+                      setTakeTarget(null);
+                      setSwapTarget({ swap, mode, flashMatch });
+                    }}
+                    onCounterOffer={(listing) => {
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setTakeTarget(null);
+                      setSwapTarget(null);
+                      setEditCounterOfferTarget(null);
+                      setEditListingTarget(null);
+                      setEditSwapTarget(null);
+                      setCounterOfferTarget({ listing });
+                    }}
+                    onCounterOfferSwap={(swap, mode) => {
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setTakeTarget(null);
+                      setSwapTarget(null);
+                      setEditCounterOfferTarget(null);
+                      setEditListingTarget(null);
+                      setEditSwapTarget(null);
+                      setCounterOfferTarget({ swap, swapMode: mode });
+                    }}
+                    pendingCounterOffers={allPendingCounterOffers}
+                    mySwapLocks={mySwapLocksQuery.data ?? []}
+                    onEditCounterOffer={(listing, co) => {
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setTakeTarget(null);
+                      setSwapTarget(null);
+                      setCounterOfferTarget(null);
+                      setEditListingTarget(null);
+                      setEditSwapTarget(null);
+                      setEditCounterOfferTarget({ listing, co });
+                    }}
+                    onEditCounterOfferSwap={(swap, co) => {
+                      const pairedCo = findPairedSwapCounterOffer(co, allPendingCounterOffers ?? []);
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setTakeTarget(null);
+                      setSwapTarget(null);
+                      setCounterOfferTarget(null);
+                      setEditListingTarget(null);
+                      setEditSwapTarget(null);
+                      setEditCounterOfferTarget({ swap, co, pairedCo });
+                    }}
+                    onEditListing={(listing) => {
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setTakeTarget(null);
+                      setSwapTarget(null);
+                      setCounterOfferTarget(null);
+                      setEditCounterOfferTarget(null);
+                      setEditSwapTarget(null);
+                      setEditListingTarget(listing);
+                    }}
+                    onEditSwap={(swap) => {
+                      setModalOpen(false);
+                      setSwapModalOpen(false);
+                      setTakeTarget(null);
+                      setSwapTarget(null);
+                      setCounterOfferTarget(null);
+                      setEditCounterOfferTarget(null);
+                      setEditListingTarget(null);
+                      setEditSwapTarget(swap);
+                    }}
+                    onDeliveryPeriodChange={(dp) => setDeliveryPeriod(dp?.trim() ? dp : "现货")}
+                    onProductChange={(id) => setProductId(id)}
+                    onCollapse={() => setListingPanelVisible(false)}
+                    onDetailOpenChange={setDetailOpen}
+                    detailHidden={childModalOpen}
+                    detailRestoreToken={detailRestoreToken}
+                    detailDismissToken={detailDismissToken}
                   />
                 </div>
-              </div>
-            ) : (
-              /* 盘口收起后的展开按钮 */
-              <button
-                onClick={() => setMarketPanelVisible(true)}
-                className="shrink-0 w-9 flex flex-col items-center justify-center gap-2 bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all py-2 h-full"
-                title="展开盘口"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M6 5l7 7-7 7" />
-                </svg>
-                <span className="text-[10px] text-t-text-3" style={{ writingMode: "vertical-rl", letterSpacing: "0.1em" }}>展开盘口</span>
-              </button>
-            )}
-          </div>
-
-          {/* ===== 挂盘（全宽） ===== */}
-          {listingPanelVisible ? (
-            <div
-              className={`relative px-1.5 pb-1.5 group/listing ${chartVisible ? "shrink-0" : "flex-1 min-h-0"}`}
-              style={chartVisible ? { height: "38vh" } : undefined}
-            >
-              <ListingPanel
-                productId={productId}
-                products={products.map(p => ({ id: p.id, name: p.name }))}
-                unit={unit}
-                canTrade={true}
-                currentUserId={user?.id}
-                defaultDeliveryPeriod={deliveryPeriod}
-                marketType={marketType}
-                onTake={(listing) => {
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setCounterOfferTarget(null);
-                  setEditCounterOfferTarget(null);
-                  setEditListingTarget(null);
-                  setEditSwapTarget(null);
-                  setSwapTarget(null);
-                  setTakeTarget(listing);
-                }}
-                onTakeSwap={(swap, mode, flashMatch) => {
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setCounterOfferTarget(null);
-                  setEditCounterOfferTarget(null);
-                  setEditListingTarget(null);
-                  setEditSwapTarget(null);
-                  setTakeTarget(null);
-                  setSwapTarget({ swap, mode, flashMatch });
-                }}
-                onCounterOffer={(listing) => {
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setTakeTarget(null);
-                  setSwapTarget(null);
-                  setEditCounterOfferTarget(null);
-                  setEditListingTarget(null);
-                  setEditSwapTarget(null);
-                  setCounterOfferTarget({ listing });
-                }}
-                onCounterOfferSwap={(swap, mode) => {
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setTakeTarget(null);
-                  setSwapTarget(null);
-                  setEditCounterOfferTarget(null);
-                  setEditListingTarget(null);
-                  setEditSwapTarget(null);
-                  setCounterOfferTarget({ swap, swapMode: mode });
-                }}
-                pendingCounterOffers={allPendingCounterOffers}
-                mySwapLocks={mySwapLocksQuery.data ?? []}
-                onEditCounterOffer={(listing, co) => {
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setTakeTarget(null);
-                  setSwapTarget(null);
-                  setCounterOfferTarget(null);
-                  setEditListingTarget(null);
-                  setEditSwapTarget(null);
-                  setEditCounterOfferTarget({ listing, co });
-                }}
-                onEditCounterOfferSwap={(swap, co) => {
-                  const pairedCo = findPairedSwapCounterOffer(co, allPendingCounterOffers ?? []);
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setTakeTarget(null);
-                  setSwapTarget(null);
-                  setCounterOfferTarget(null);
-                  setEditListingTarget(null);
-                  setEditSwapTarget(null);
-                  setEditCounterOfferTarget({ swap, co, pairedCo });
-                }}
-                onEditListing={(listing) => {
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setTakeTarget(null);
-                  setSwapTarget(null);
-                  setCounterOfferTarget(null);
-                  setEditCounterOfferTarget(null);
-                  setEditSwapTarget(null);
-                  setEditListingTarget(listing);
-                }}
-                onEditSwap={(swap) => {
-                  setModalOpen(false);
-                  setSwapModalOpen(false);
-                  setTakeTarget(null);
-                  setSwapTarget(null);
-                  setCounterOfferTarget(null);
-                  setEditCounterOfferTarget(null);
-                  setEditListingTarget(null);
-                  setEditSwapTarget(swap);
-                }}
-                onDeliveryPeriodChange={(dp) => setDeliveryPeriod(dp?.trim() ? dp : "现货")}
-                onCollapse={() => setListingPanelVisible(false)}
-                onDetailOpenChange={setDetailOpen}
-                detailHidden={childModalOpen}
-                detailRestoreToken={detailRestoreToken}
-                detailDismissToken={detailDismissToken}
-              />
-            </div>
+              ) : (
+                <div className="px-1.5 pb-1.5 shrink-0">
+                  <button
+                    onClick={() => setListingPanelVisible(true)}
+                    className="w-full h-7 flex items-center justify-center bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all text-[11px] gap-1"
+                    title="展开挂盘列表"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7M19 3l-7 7-7-7" />
+                    </svg>
+                    展开挂盘
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
-            /* 挂盘收起后的展开按钮 */
-            <div className="px-1.5 pb-1.5 shrink-0">
-              <button
-                onClick={() => setListingPanelVisible(true)}
-                className="w-full h-7 flex items-center justify-center bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all text-[11px] gap-1"
-                title="展开挂盘列表"
-              >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7M19 3l-7 7-7-7" />
-                </svg>
-                展开挂盘
-              </button>
-            </div>
+            <>
+              {/* ===== K线收起：左发盘 | 右盘口（自选在更左侧） ===== */}
+              <div className="shrink-0 px-1.5 pt-1.5">
+                <button
+                  onClick={() => setChartVisible(true)}
+                  className="w-full h-7 flex items-center justify-center gap-1.5 bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all text-[11px]"
+                  title="展开K线图"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7M19 3l-7 7-7-7" />
+                  </svg>
+                  展开K线图
+                  <span className="text-t-text-3">
+                    · {selectedProduct?.name ?? productId}
+                    {deliveryPeriod ? ` · ${formatDeliveryPeriodDisplay(deliveryPeriod)}` : ""}
+                  </span>
+                </button>
+              </div>
+
+              <div className="flex-1 flex min-h-0 overflow-hidden p-1.5 pt-1 gap-0">
+                {/* 中间：发盘列表 */}
+                {listingPanelVisible ? (
+                  <div className="relative flex-1 min-w-0 min-h-0 h-full group/listing">
+                    <ListingPanel
+                      productId={productId}
+                      products={products.map(p => ({ id: p.id, name: p.name }))}
+                      unit={unit}
+                      canTrade={true}
+                      currentUserId={user?.id}
+                      defaultDeliveryPeriod={deliveryPeriod}
+                      marketType={marketType}
+                      onTake={(listing) => {
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setCounterOfferTarget(null);
+                        setEditCounterOfferTarget(null);
+                        setEditListingTarget(null);
+                        setEditSwapTarget(null);
+                        setSwapTarget(null);
+                        setTakeTarget(listing);
+                      }}
+                      onTakeSwap={(swap, mode, flashMatch) => {
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setCounterOfferTarget(null);
+                        setEditCounterOfferTarget(null);
+                        setEditListingTarget(null);
+                        setEditSwapTarget(null);
+                        setTakeTarget(null);
+                        setSwapTarget({ swap, mode, flashMatch });
+                      }}
+                      onCounterOffer={(listing) => {
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setTakeTarget(null);
+                        setSwapTarget(null);
+                        setEditCounterOfferTarget(null);
+                        setEditListingTarget(null);
+                        setEditSwapTarget(null);
+                        setCounterOfferTarget({ listing });
+                      }}
+                      onCounterOfferSwap={(swap, mode) => {
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setTakeTarget(null);
+                        setSwapTarget(null);
+                        setEditCounterOfferTarget(null);
+                        setEditListingTarget(null);
+                        setEditSwapTarget(null);
+                        setCounterOfferTarget({ swap, swapMode: mode });
+                      }}
+                      pendingCounterOffers={allPendingCounterOffers}
+                      mySwapLocks={mySwapLocksQuery.data ?? []}
+                      onEditCounterOffer={(listing, co) => {
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setTakeTarget(null);
+                        setSwapTarget(null);
+                        setCounterOfferTarget(null);
+                        setEditListingTarget(null);
+                        setEditSwapTarget(null);
+                        setEditCounterOfferTarget({ listing, co });
+                      }}
+                      onEditCounterOfferSwap={(swap, co) => {
+                        const pairedCo = findPairedSwapCounterOffer(co, allPendingCounterOffers ?? []);
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setTakeTarget(null);
+                        setSwapTarget(null);
+                        setCounterOfferTarget(null);
+                        setEditListingTarget(null);
+                        setEditSwapTarget(null);
+                        setEditCounterOfferTarget({ swap, co, pairedCo });
+                      }}
+                      onEditListing={(listing) => {
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setTakeTarget(null);
+                        setSwapTarget(null);
+                        setCounterOfferTarget(null);
+                        setEditCounterOfferTarget(null);
+                        setEditSwapTarget(null);
+                        setEditListingTarget(listing);
+                      }}
+                      onEditSwap={(swap) => {
+                        setModalOpen(false);
+                        setSwapModalOpen(false);
+                        setTakeTarget(null);
+                        setSwapTarget(null);
+                        setCounterOfferTarget(null);
+                        setEditCounterOfferTarget(null);
+                        setEditListingTarget(null);
+                        setEditSwapTarget(swap);
+                      }}
+                      onDeliveryPeriodChange={(dp) => setDeliveryPeriod(dp?.trim() ? dp : "现货")}
+                      onProductChange={(id) => setProductId(id)}
+                      onCollapse={() => setListingPanelVisible(false)}
+                      onDetailOpenChange={setDetailOpen}
+                      detailHidden={childModalOpen}
+                      detailRestoreToken={detailRestoreToken}
+                      detailDismissToken={detailDismissToken}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setListingPanelVisible(true)}
+                    className="flex-1 min-w-0 h-full flex items-center justify-center bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all text-[11px] gap-1"
+                    title="展开挂盘列表"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M6 5l7 7-7 7" />
+                    </svg>
+                    展开挂盘
+                  </button>
+                )}
+
+                {listingPanelVisible && marketPanelVisible && (
+                  <PanelResizeHandle
+                    axis="x"
+                    title="拖动调整盘口宽度"
+                    className="mx-0.5"
+                    onDrag={(delta) => {
+                      setMarketWidth((w) => clamp(w - delta, MARKET_MIN, MARKET_MAX));
+                    }}
+                  />
+                )}
+
+                {/* 右边：盘口 */}
+                {marketPanelVisible ? (
+                  <div
+                    className="relative shrink-0 flex flex-col overflow-hidden group/market"
+                    style={{ width: marketWidth }}
+                  >
+                    <div className="flex-1 min-h-0 bg-t-panel rounded-lg shadow-panel flex flex-col">
+                      <MarketSummaryPanel
+                        productId={productId}
+                        productName={selectedProduct?.name || productId}
+                        deliveryPeriod={deliveryPeriod}
+                        unit={unit}
+                        onCollapse={() => setMarketPanelVisible(false)}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setMarketPanelVisible(true)}
+                    className="shrink-0 w-9 flex flex-col items-center justify-center gap-2 bg-t-panel rounded-lg shadow-panel text-t-text-2 hover:text-t-text hover:bg-t-hover transition-all py-2 h-full ml-1"
+                    title="展开盘口"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M6 5l7 7-7 7" />
+                    </svg>
+                    <span className="text-[10px] text-t-text-3" style={{ writingMode: "vertical-rl", letterSpacing: "0.1em" }}>展开盘口</span>
+                  </button>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>

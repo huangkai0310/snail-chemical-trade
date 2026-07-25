@@ -1,14 +1,36 @@
-/** 发盘默认过期：当天 18:00（本地）；若已到/已过 18:00 则次日 18:00 */
+import { isWorkday, nextWorkday, nextWorkdayAfter, todayStart } from "./china-calendar";
+
+/** 发盘默认过期：当天 18:00（本地）；若已到/已过 18:00 或非工作日则顺延至下一工作日 18:00 */
 export function defaultExpiresAtLocal(): string {
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 18, 0, 0, 0);
-  if (now.getTime() >= d.getTime()) {
-    d.setDate(d.getDate() + 1);
-  }
+  const day = resolveDefaultExpireDay(new Date());
+  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 18, 0, 0, 0);
   return toDatetimeLocalValue(d);
 }
 
-/** 发盘默认开始：空字符串 = 立即发布 */
+function resolveDefaultExpireDay(now: Date): Date {
+  const today = todayStart();
+  const today18 = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 18, 0, 0, 0);
+  if (isWorkday(today) && now.getTime() < today18.getTime()) {
+    return today;
+  }
+  return nextWorkday(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+}
+
+/** 下一工作日 09:00（用于「下一工作日开盘」快捷） */
+export function nextWorkdayMorningLocal(): string {
+  const day = nextWorkdayAfter(todayStart(), 1);
+  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0, 0, 0);
+  return toDatetimeLocalValue(d);
+}
+
+/** 下一工作日 18:00 */
+export function nextWorkdayExpireLocal(): string {
+  const day = nextWorkdayAfter(todayStart(), 1);
+  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 18, 0, 0, 0);
+  return toDatetimeLocalValue(d);
+}
+
+/** 发盘默认开始：空字符串 = 立即发布（仅工作日可立即挂；非工作日由 UI 禁用） */
 export function defaultStartsAtLocal(): string {
   return "";
 }
@@ -55,6 +77,17 @@ export function expiresAtLocalToISO(local: string): string {
   const d = new Date(local);
   if (Number.isNaN(d.getTime())) return new Date(defaultExpiresAtLocal()).toISOString();
   return d.toISOString();
+}
+
+/** 校验 datetime-local / 立即发布 是否落在工作日 */
+export function isWorkdayDateTimeLocal(local?: string, treatEmptyAsToday = false): boolean {
+  if (!local || !local.trim()) {
+    if (!treatEmptyAsToday) return true;
+    return isWorkday(todayStart());
+  }
+  const d = new Date(local);
+  if (Number.isNaN(d.getTime())) return false;
+  return isWorkday(d);
 }
 
 /** 列表高亮展示过期时间 */

@@ -24,7 +24,8 @@ export type NotificationType =
   | "swap_lock_received"       // 换盘被单边锁定
   | "swap_lock_cancelled"      // 换盘单边锁定被取消
   | "listing_expire_soon"      // 即将到期
-  | "listing_publish_soon";    // 即将发布
+  | "listing_publish_soon"     // 即将发布
+  | "contract_cancelled";      // 自选合约已取消
 
 export interface AppNotification {
   id: string;
@@ -56,6 +57,7 @@ interface NotificationState {
   fromTrade: (productName: string, price: number, quantity: number, role: "buyer" | "seller", refId?: string, source?: string, perspective?: "listing" | "swap") => void;
   fromSwapLock: (data: SwapLockNotification, eventType: "received" | "cancelled") => void;
   fromScheduleReminder: (data: ScheduleReminderNotification, eventType: "expire" | "publish") => void;
+  fromContractCancelled: (productName: string, deliveryPeriod: string, productId: string) => void;
 }
 
 function genId(): string {
@@ -78,6 +80,7 @@ function buildTitle(type: NotificationType): string {
     case "swap_lock_cancelled":     return "换盘锁定已取消";
     case "listing_expire_soon":     return "即将到期";
     case "listing_publish_soon":    return "即将发布";
+    case "contract_cancelled":      return "合约已取消";
   }
 }
 
@@ -306,6 +309,16 @@ export const useNotificationStore = create<NotificationState>((set, get) => {
         body,
         refType: data.ref_type,
         refId: data.ref_id,
+      });
+    },
+
+    fromContractCancelled: (productName, deliveryPeriod, productId) => {
+      const periodLabel = deliveryPeriod?.trim() || "现货";
+      get().addNotification({
+        type: "contract_cancelled",
+        title: buildTitle("contract_cancelled"),
+        body: `您自选的合约「${productName} · ${periodLabel}」已取消挂盘，已从自选中移除`,
+        refId: productId,
       });
     },
   };

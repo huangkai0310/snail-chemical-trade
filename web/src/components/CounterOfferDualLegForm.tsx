@@ -5,6 +5,7 @@ import type { SwapListing } from "@/lib/types";
 import { DEFAULT_NEGOTIABLE_TERMS, sanitizeNegotiableTerms } from "@/lib/types";
 import { DELIVERY_METHOD_OPTIONS } from "@/components/CreateListingModal";
 import Combobox from "@/components/ui/Combobox";
+import DeliveryPeriodPicker from "@/components/DeliveryPeriodPicker";
 import { sanitizeText, isSafeInput } from "@/lib/validate";
 import { formatNegotiableTerms, formatFreeStorage, formatPartial, formatSpecs, formatBoardSerial } from "@/lib/format";
 import { optionalOfferField, optionalOfferFreeStorage } from "@/lib/swap-counter-offer";
@@ -328,13 +329,10 @@ function LegNegotiationColumn({
                 <span>交割期</span>
                 <span className="text-t-text-2 font-normal">原值：{prefill.dp || "—"}</span>
               </label>
-              <input
-                type="text"
+              <DeliveryPeriodPicker
                 value={form.deliveryPeriod}
-                onChange={(e) => update("deliveryPeriod", sanitizeText(e.target.value))}
-                className={`${highlightInputCls} text-sm`}
-                readOnly={loading}
-                disabled={loading}
+                onChange={(v) => update("deliveryPeriod", v)}
+                placeholder="在日历中选择交割期"
               />
             </div>
           )}

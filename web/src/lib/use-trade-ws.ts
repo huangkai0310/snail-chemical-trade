@@ -50,9 +50,23 @@ export interface ScheduleReminderNotification {
   minutes_left?: number;
 }
 
+export interface MarketStatusNotification {
+  market_open: boolean;
+  reason?: string;
+}
+
+export interface ContractsChangedNotification {
+  product_id: string;
+  delivery_period?: string;
+  /** created | deleted */
+  action?: string;
+}
+
 export interface UseTradeWSCallbacks {
   onTrade?: (trade: WSTrade) => void;
   onNewListing?: (data: { product_id: string }) => void;
+  onMarketStatus?: (data: MarketStatusNotification) => void;
+  onContractsChanged?: (data: ContractsChangedNotification) => void;
   onCounterOfferReceived?: (data: CounterOfferNotification) => void;
   onCounterOfferAccepted?: (data: CounterOfferNotification) => void;
   onCounterOfferRejected?: (data: CounterOfferNotification) => void;
@@ -86,6 +100,12 @@ function dispatchMessage(msg: WSMessage) {
         break;
       case "new_listing":
         cb.onNewListing?.(msg.payload as { product_id: string });
+        break;
+      case "market_status":
+        cb.onMarketStatus?.(msg.payload as MarketStatusNotification);
+        break;
+      case "contracts_changed":
+        cb.onContractsChanged?.(msg.payload as ContractsChangedNotification);
         break;
       case "counter_offer_received":
         cb.onCounterOfferReceived?.(msg.payload as CounterOfferNotification);

@@ -4,10 +4,12 @@ import { useEffect } from "react";
 import { useTradeWS } from "@/lib/use-trade-ws";
 import { useNotificationStore } from "@/lib/notification-store";
 import { useAuthStore } from "@/lib/auth-store";
-import { fetchProducts } from "@/lib/api";
+import { fetchProductContracts, fetchProducts } from "@/lib/api";
 import { toast } from "@/components/Toast";
 import { playNotificationSound, unlockAudio } from "@/lib/sound-prefs";
 import { shouldSuppressSwapTradeToast } from "@/lib/listing-toast-suppress";
+import { pruneFavoritesForProduct, removeFavoriteByContract } from "@/lib/use-favorites";
+import { formatDeliveryPeriodDisplay } from "@/lib/delivery-period";
 import type { WSTrade } from "@/lib/types";
 
 // 缓存产品名称映射，避免每次成交都请求
@@ -37,6 +39,18 @@ function notifyTone() {
   playNotificationSound();
 }
 
+async function notifyContractCancelled(
+  productId: string,
+  deliveryPeriod: string,
+  fromContractCancelled: (productName: string, deliveryPeriod: string, productId: string) => void,
+) {
+  const productName = await getProductName(productId);
+  const periodLabel = formatDeliveryPeriodDisplay(deliveryPeriod);
+  fromContractCancelled(productName, periodLabel, productId);
+  notifyTone();
+  toast(`合约「${productName} · ${periodLabel}」已取消，已从自选中移除`, "info");
+}
+
 /**
  * 全局通知监听器
  * 在所有页面都运行，通过 WebSocket 接收议价/成交消息，
@@ -49,6 +63,7 @@ export default function GlobalNotificationListener() {
   const fromTrade = useNotificationStore((s) => s.fromTrade);
   const fromSwapLock = useNotificationStore((s) => s.fromSwapLock);
   const fromScheduleReminder = useNotificationStore((s) => s.fromScheduleReminder);
+  const fromContractCancelled = useNotificationStore((s) => s.fromContractCancelled);
 
   useEffect(() => {
     switchUser(userId);
@@ -164,6 +179,35 @@ export default function GlobalNotificationListener() {
       notifyTone();
       const mins = data.minutes_left != null && data.minutes_left > 0 ? data.minutes_left : 5;
       toast(`${data.ref_type === "swap" ? "换盘" : "发盘"}约 ${mins} 分钟后发布`, "info");
+    },
+    onContractsChanged: async (data) => {
+      if (!data?.product_id) return;
+      const productId = data.product_id;
+
+      // 明确删除：按交割期立刻摘自选并通知
+      if (data.action === "deleted") {
+        const dp = (data.delivery_period || "现货").trim() || "现货";
+        if (dp !== "现货" && removeFavoriteByContract(productId, dp)) {
+          await notifyContractCancelled(productId, dp, fromContractCancelled);
+          return;
+        }
+      }
+
+      // 兜底：拉最新合约列表，清掉已不存在的自选（兼容旧服务端只推 product_id）
+      if (data.action === "created") return;
+      try {
+        const contracts = await fetchProductContracts(productId);
+        const active = new Set(
+          contracts.map((c) => (c.delivery_period || "").trim() || "现货"),
+        );
+        active.add("现货");
+        const removed = pruneFavoritesForProduct(productId, active);
+        for (const entry of removed) {
+          await notifyContractCancelled(productId, entry.deliveryPeriod, fromContractCancelled);
+        }
+      } catch {
+        /* ignore */
+      }
     },
   });
 

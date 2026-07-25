@@ -3,7 +3,13 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Product, LatestPriceResponse, OrderBookResponse } from "@/lib/types";
-import { fetchLatestPrice, fetchOrderBook } from "@/lib/api";
+import { fetchLatestPrice, fetchOrderBook, fetchProductContracts } from "@/lib/api";
+import {
+  formatDeliveryPeriodDisplay,
+  contractCode,
+  sortDeliveryPeriods,
+  productSymbol,
+} from "@/lib/delivery-period";
 
 interface Props {
   open: boolean;
@@ -12,43 +18,6 @@ interface Props {
   onSelect: (productId: string, deliveryPeriod: string) => void;
   onToggleFav: (key: string) => void;
   isFav: (deliveryPeriod: string) => boolean;
-}
-
-/** 生成当前及未来8个月的交割期 */
-function buildDeliveryPeriods(): string[] {
-  const periods: string[] = ["现货"];
-  const now = new Date();
-  const startYear = now.getFullYear();
-  const startMonth = now.getMonth();
-  for (let offset = 0; offset <= 8; offset++) {
-    const total = startMonth + offset;
-    const year = startYear + Math.floor(total / 12);
-    const month = total % 12;
-    const yy = String(year).slice(-2);
-    const mm = String(month + 1).padStart(2, "0");
-    const prefix = `${yy}${mm}`;
-    const midDate = new Date(year, month, 15);
-    const endDate = new Date(year, month, 28);
-    if (midDate >= now) periods.push(`${prefix}上`);
-    if (endDate >= now) periods.push(`${prefix}下`);
-  }
-  return periods;
-}
-
-const PRODUCT_SYMBOLS: Record<string, string> = {
-  methanol: "MA", pta: "TA", styrene: "SM", meg: "EG", pp: "PP",
-  benzene: "BZ", propylene: "PL", phenol: "PH", acetone: "AC",
-  isopropanol: "IPA", mibk: "MIBK", toluene: "TL", xylene: "XL",
-};
-
-function getSymbol(product: Product): string {
-  return PRODUCT_SYMBOLS[product.id] ?? product.name_en ?? product.id.toUpperCase();
-}
-
-function periodSymbol(product: Product, deliveryPeriod: string): string {
-  const sym = getSymbol(product);
-  if (deliveryPeriod === "现货") return `${sym}00`;
-  return `${sym}${deliveryPeriod.replace(/[上下]/g, m => (m === "上" ? "A" : "B"))}`;
 }
 
 function PeriodRow({
@@ -102,10 +71,10 @@ function PeriodRow({
       onClick={() => onSelect(product.id, deliveryPeriod)}
     >
       <span className="w-20 shrink-0 font-mono font-semibold text-[13px] text-t-text text-center">
-        {periodSymbol(product, deliveryPeriod)}
+        {contractCode(product.id, deliveryPeriod, product.name_en)}
       </span>
       <span className={`flex-1 text-[13px] text-center ${isSpot ? "text-yellow-500 font-bold" : "text-t-text font-medium"}`}>
-        {deliveryPeriod}
+        {formatDeliveryPeriodDisplay(deliveryPeriod)}
       </span>
       <span className={`w-16 text-center font-mono font-semibold ${latest > 0 ? (isCellUp ? "text-trade-up" : "text-trade-down") : "text-t-text-3"}`}>
         {latest > 0 ? latest.toFixed(1) : "-"}
@@ -150,7 +119,26 @@ function PeriodRow({
 export default function ProductDetailModal({
   open, product, onClose, onSelect, onToggleFav, isFav,
 }: Props) {
-  const deliveryPeriods = useMemo(() => buildDeliveryPeriods(), []);
+  const contractsQuery = useQuery({
+    queryKey: ["contracts", product.id],
+    queryFn: () => fetchProductContracts(product.id),
+    staleTime: 15_000,
+    enabled: open,
+  });
+
+  const deliveryPeriods = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    const push = (dp: string) => {
+      if (!dp || seen.has(dp)) return;
+      seen.add(dp);
+      list.push(dp);
+    };
+    push("现货");
+    for (const c of contractsQuery.data ?? []) push(c.delivery_period);
+    return sortDeliveryPeriods(list);
+  }, [contractsQuery.data]);
+
   const { data: spotLatest } = useQuery<LatestPriceResponse>({
     queryKey: ["latestPrice", product.id, "现货"],
     queryFn: () => fetchLatestPrice(product.id, "现货"),
@@ -161,7 +149,7 @@ export default function ProductDetailModal({
 
   if (!open) return null;
 
-  const sym = getSymbol(product);
+  const sym = productSymbol(product.id, product.name_en);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
@@ -176,7 +164,7 @@ export default function ProductDetailModal({
             <span className="text-sm font-mono font-bold text-trade-up">{sym}</span>
             <span className="text-sm font-semibold text-t-text">{product.name}</span>
             <span className="text-[10px] text-t-text-3 bg-t-tertiary px-2 py-0.5 rounded">
-              {product.category ?? "其他"}
+              已建立合约 {deliveryPeriods.length}
             </span>
             {spotLatest?.latest ? (
               <span className={`text-sm font-mono font-bold ${(spotLatest.latest >= (spotLatest?.prev_24h ?? 0)) ? "text-trade-up" : "text-trade-down"}`}>
@@ -210,16 +198,24 @@ export default function ProductDetailModal({
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {deliveryPeriods.map((dp) => (
-            <PeriodRow
-              key={dp}
-              product={product}
-              deliveryPeriod={dp}
-              onSelect={onSelect}
-              onToggleFav={onToggleFav}
-              isFav={isFav}
-            />
-          ))}
+          {contractsQuery.isLoading ? (
+            <div className="py-8 text-center text-xs text-t-text-3">加载合约…</div>
+          ) : (
+            deliveryPeriods.map((dp) => (
+              <PeriodRow
+                key={dp}
+                product={product}
+                deliveryPeriod={dp}
+                onSelect={onSelect}
+                onToggleFav={onToggleFav}
+                isFav={isFav}
+              />
+            ))
+          )}
+        </div>
+
+        <div className="px-4 py-2 border-t border-t-border/50 text-[10px] text-t-text-3 text-center shrink-0">
+          交割期由用户首次发盘建立 · 点击行进入交易 · 点击 ★ 添加自选
         </div>
       </div>
     </div>

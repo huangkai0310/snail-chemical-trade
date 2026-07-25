@@ -2,9 +2,10 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchPriceHistory, fetchLatestPrice, fetchOrderBook } from "@/lib/api";
+import { fetchPriceHistory, fetchLatestPrice, fetchOrderBook, fetchMarketStatus } from "@/lib/api";
 import TradePanel from "./TradePanel";
 import type { DepthLevel, PriceCandle } from "@/lib/types";
+import { formatDeliveryPeriodDisplay } from "@/lib/delivery-period";
 
 interface Props {
   productId: string;
@@ -101,6 +102,15 @@ export default function MarketSummaryPanel({ productId, productName, deliveryPer
     refetchInterval: ORDERBOOK_REFETCH_MS,
   });
 
+  const marketStatusQuery = useQuery({
+    queryKey: ["marketStatus"],
+    queryFn: fetchMarketStatus,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+  });
+  const marketOpen = marketStatusQuery.data?.market_open !== false;
+  const marketCloseReason = marketStatusQuery.data?.reason?.trim() || "";
+
   const candles = dailyQuery.data ?? [];
   const todayCandle = useMemo(() => candles.find(isTodayCandle), [candles]);
   const contractPrice = contractLatestQuery.data?.latest ?? 0;
@@ -159,10 +169,20 @@ export default function MarketSummaryPanel({ productId, productName, deliveryPer
             <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${
               deliveryPeriod === "现货" ? "text-status-warning bg-status-warning-bg" : "text-status-info bg-status-info-bg"
             }`}>
-              {deliveryPeriod}
+              {formatDeliveryPeriodDisplay(deliveryPeriod)}
             </span>
           )}
           <span className="text-[11px] font-medium text-t-text">{productName || productId.toUpperCase()}</span>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+              marketOpen
+                ? "text-emerald-600 bg-emerald-500/15 dark:text-emerald-400"
+                : "text-red-600 bg-red-500/15 dark:text-red-400"
+            }`}
+            title={marketOpen ? "市场开市中" : marketCloseReason || "市场已闭市"}
+          >
+            {marketOpen ? "开市" : "闭市"}
+          </span>
           {/* 收起盘口按钮 — 标题栏最右侧，与品种名用分隔线隔开 */}
           <button
             onClick={onCollapse}

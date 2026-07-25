@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchListingsPaged, fetchSwaps, cancelListing, cancelSwap, cancelCounterOffer, cancelSwapLock, type SwapMatchLock } from "@/lib/api";
 import type { Listing, SwapListing, CounterOffer, Product } from "@/lib/types";
+import ContractSelector from "./ContractSelector";
+import { formatDeliveryPeriodDisplay } from "@/lib/delivery-period";
 import {
   getSwapLockState,
   SWAP_LOCK_BUY_TOOLTIP,
@@ -168,6 +170,8 @@ interface Props {
   marketType?: "all" | "spot" | "forward";
   /** 交割期筛选变更回调（同步盘口面板） */
   onDeliveryPeriodChange?: (deliveryPeriod: string) => void;
+  /** 品种变更回调（与左侧自选/盘口同步） */
+  onProductChange?: (productId: string) => void;
   /** 收起挂盘列表回调 */
   onCollapse?: () => void;
   /** 详情弹窗打开/关闭通知（用于父组件判断操作弹窗是否需要"返回详情"按钮） */
@@ -263,8 +267,7 @@ function FillBar({ filled, total, color, status }: { filled: number; total: numb
 }
 
 function fmtDeliveryPeriod(period?: string | null): string {
-  if (!period || period.trim() === "") return "现货";
-  return period;
+  return formatDeliveryPeriodDisplay(period);
 }
 
 const STATUS_CLS: Record<string, string> = {
@@ -298,6 +301,8 @@ export default function ListingPanel({
   onEditCounterOfferSwap,
   defaultDeliveryPeriod,
   marketType = "all",
+  onDeliveryPeriodChange,
+  onProductChange,
   onCollapse,
   onDetailOpenChange,
   detailHidden,
@@ -580,7 +585,6 @@ export default function ListingPanel({
   );
   const buyTotal = buyQuery.data?.total ?? 0;
   const sellTotal = sellQuery.data?.total ?? 0;
-  const swapTotal = swapQuery.data?.total ?? 0;
 
   // 统一数据更新时间 + 手动刷新
   const listUpdatedAt = Math.max(
@@ -749,20 +753,19 @@ export default function ListingPanel({
     return filtered;
   }, [swapListings, deliveryPeriods, marketType, isSpotSwap, isForwardSwap]);
 
-  const filteredBuyTotal = filterTab === "buy" ? buyTotal : 0;
-  const filteredSellTotal = filterTab === "sell" ? sellTotal : 0;
-  const filteredSwapTotal = filterTab === "swap"
-    ? filteredSwapListings.length
-    : 0;
+  const currentTotal =
+    filterTab === "buy"
+      ? buyTotal
+      : filterTab === "sell"
+        ? sellTotal
+        : filteredSwapListings.length;
 
   const maxPages = (() => {
     if (filterTab === "buy") return Math.max(1, buyQuery.data?.total_page ?? 1);
     if (filterTab === "sell") return Math.max(1, sellQuery.data?.total_page ?? 1);
-    return Math.max(1, swapQuery.data?.total_page ?? 1);
+    // 换盘按交割期客户端过滤后，页数按过滤结果估算
+    return Math.max(1, Math.ceil(filteredSwapListings.length / pageSize) || 1);
   })();
-
-  const currentTotal =
-    filterTab === "buy" ? buyTotal : filterTab === "sell" ? sellTotal : swapTotal;
 
   // 总数变少时把当前页钳回合法范围
   useEffect(() => {
@@ -957,7 +960,7 @@ export default function ListingPanel({
             {listing.filled > 0 && <FillBar filled={listing.filled} total={listing.quantity} color={isBuy ? "bg-trade-up" : "bg-trade-down"} status={listing.status} />}
           </div>
         </td>
-        <td className="px-1.5 py-1 text-center"><span className="text-[11px] px-1.5 py-0.5 rounded bg-t-hover text-t-text-2">{listing.delivery_period || "现货"}</span></td>
+        <td className="px-1.5 py-1 text-center"><span className="text-[11px] px-1.5 py-0.5 rounded bg-t-hover text-t-text-2">{fmtDeliveryPeriod(listing.delivery_period)}</span></td>
         {/* 交割地 */}
         <td className="px-1.5 py-1 text-center text-[11px] text-t-text-3 whitespace-nowrap">
           {listing.delivery_location || "-"}
@@ -1177,7 +1180,7 @@ export default function ListingPanel({
               ? "bg-status-warning-bg text-status-warning"
               : "bg-status-info-bg text-status-info"
           }`}>
-            {swap.sell_delivery_period || "现货"}
+            {fmtDeliveryPeriod(swap.sell_delivery_period)}
           </span>
         </td>
         {/* 卖 付款方式 */}
@@ -1250,7 +1253,7 @@ export default function ListingPanel({
               ? "bg-status-warning-bg text-status-warning"
               : "bg-status-info-bg text-status-info"
           }`}>
-            {swap.buy_delivery_period || "现货"}
+            {fmtDeliveryPeriod(swap.buy_delivery_period)}
           </span>
         </td>
         {/* 买 付款方式 */}
@@ -1623,13 +1626,13 @@ export default function ListingPanel({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <div className="flex items-center gap-1.5 shrink-0">
             <span className="text-xs font-semibold text-t-text shrink-0">今日挂盘列表</span>
-            <span
-              className="px-1.5 py-0.5 text-[11px] font-semibold rounded whitespace-nowrap shrink-0 bg-t-accent-bg text-t-accent border border-t-accent/25"
-              title="由左侧自选决定：品种 + 交割期"
-            >
-              {(products.find((p) => p.id === productId)?.name ?? productId)
-                + (defaultDeliveryPeriod ? ` · ${defaultDeliveryPeriod}` : "")}
-            </span>
+            <ContractSelector
+              products={products}
+              productId={productId}
+              deliveryPeriod={defaultDeliveryPeriod || "现货"}
+              onProductChange={(id) => onProductChange?.(id)}
+              onDeliveryPeriodChange={(dp) => onDeliveryPeriodChange?.(dp?.trim() ? dp : "现货")}
+            />
           </div>
           <span className="text-[10px] text-t-text-3 tabular-nums whitespace-nowrap shrink-0" title="列表最近一次从服务器获取的时间">
             更新 {fmtListUpdatedAt(listUpdatedAt)}
@@ -1657,7 +1660,8 @@ export default function ListingPanel({
               const active = filterTab === tab;
               const label = tab === "buy" ? "买" : tab === "sell" ? "卖" : "换盘";
               const colorCls = tab === "buy" ? "text-trade-up-text" : tab === "sell" ? "text-trade-down-text" : "text-status-info";
-              const count = tab === "buy" ? buyTotal : tab === "sell" ? sellTotal : swapTotal;
+              const count =
+                tab === "buy" ? buyTotal : tab === "sell" ? sellTotal : filteredSwapListings.length;
               return (
                 <button key={tab} onClick={() => { setFilterTab(tab); setPage(1); }} className={`px-2 py-0.5 text-[11px] rounded transition-colors whitespace-nowrap ${active ? "bg-t-accent text-white" : `${colorCls} hover:text-t-text"`}`}>{label} <span className="opacity-60">{count}</span></button>
               );

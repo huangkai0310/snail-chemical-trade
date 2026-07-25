@@ -7,6 +7,7 @@ import { fetchLatestPrice } from "@/lib/api";
 import { useFavorites } from "@/lib/use-favorites";
 import { persistWatchlistTab } from "@/components/PreferencesSync";
 import ProductDetailModal from "@/components/ProductDetailModal";
+import { formatDeliveryPeriodDisplay, compareDeliveryPeriods } from "@/lib/delivery-period";
 
 interface Props {
   products: Product[];
@@ -124,7 +125,7 @@ function DataRow({
             <div className="text-[10px] font-mono mt-0.5">
               <span className="text-t-text-3">{getSymbol(product)}</span>
               <span className="text-t-text-3 mx-0.5">·</span>
-              <span className={`font-semibold ${deliveryPeriod === "现货" ? "text-status-warning" : "text-blue-400"}`}>{deliveryPeriod}</span>
+              <span className={`font-semibold ${deliveryPeriod === "现货" ? "text-status-warning" : "text-blue-400"}`}>{formatDeliveryPeriodDisplay(deliveryPeriod)}</span>
             </div>
           </div>
           {/* 右侧：价格 + 涨跌幅 */}
@@ -192,6 +193,47 @@ export default function WatchList({ products, selectedId, selectedDeliveryPeriod
 
   const { favorites, favCount, toggleFavorite, reorderFavorites, isFav } = useFavorites();
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+
+  // 进入自选后：对照服务端合约表，清掉已不存在的交割期（并提示）
+  useEffect(() => {
+    if (tab !== "favorites" || favorites.length === 0) return;
+    const productIds = [...new Set(favorites.map((f) => f.productId))];
+    let cancelled = false;
+    (async () => {
+      const { fetchProductContracts } = await import("@/lib/api");
+      const { pruneFavoritesForProduct } = await import("@/lib/use-favorites");
+      const { toast } = await import("@/components/Toast");
+      const { formatDeliveryPeriodDisplay } = await import("@/lib/delivery-period");
+      const { useNotificationStore } = await import("@/lib/notification-store");
+      for (const pid of productIds) {
+        if (cancelled) return;
+        try {
+          const contracts = await fetchProductContracts(pid);
+          if (cancelled) return;
+          const active = new Set(
+            contracts.map((c) => (c.delivery_period || "").trim() || "现货"),
+          );
+          active.add("现货");
+          const removed = pruneFavoritesForProduct(pid, active);
+          for (const entry of removed) {
+            const productName =
+              productsMap.get(pid)?.name || pid;
+            const periodLabel = formatDeliveryPeriodDisplay(entry.deliveryPeriod);
+            useNotificationStore.getState().fromContractCancelled(productName, periodLabel, pid);
+            toast(`合约「${productName} · ${periodLabel}」已取消，已从自选中移除`, "info");
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // 仅在切到自选 / 自选键变化时核对
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, favorites.map((f) => f.key).join("|")]);
+
   // 品种总览：分类折叠状态（集合内的分类=已折叠；默认全部折叠）
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     () => new Set(Object.keys(SUB_CATEGORIES))
@@ -253,7 +295,7 @@ export default function WatchList({ products, selectedId, selectedDeliveryPeriod
   }, [boardGroups]);
 
   // 自选列表：按 productId + deliveryPeriod 为最小粒度渲染
-  // 产品列表尚未加载时仍显示自选项，避免「登录后自选短暂/持续消失」
+  // 交割期按时间正序；同品种聚在一起
   const favEntries = useMemo(() => {
     const entries = favorites.map((f) => {
       const product =
@@ -269,9 +311,18 @@ export default function WatchList({ products, selectedId, selectedDeliveryPeriod
       return { f, product };
     });
 
-    if (favSort === "name") {
-      entries.sort((a, b) => a.product.name.localeCompare(b.product.name, "zh"));
-    }
+    entries.sort((a, b) => {
+      if (favSort === "name") {
+        const byName = a.product.name.localeCompare(b.product.name, "zh");
+        if (byName !== 0) return byName;
+        return compareDeliveryPeriods(a.f.deliveryPeriod, b.f.deliveryPeriod);
+      }
+      // 默认：同品种聚在一起，交割期按时间正序
+      const aFirst = favorites.findIndex((x) => x.productId === a.f.productId);
+      const bFirst = favorites.findIndex((x) => x.productId === b.f.productId);
+      if (aFirst !== bFirst) return aFirst - bFirst;
+      return compareDeliveryPeriods(a.f.deliveryPeriod, b.f.deliveryPeriod);
+    });
     return entries;
   }, [favorites, productsMap, favSort]);
 
@@ -327,19 +378,19 @@ export default function WatchList({ products, selectedId, selectedDeliveryPeriod
   return (
     <div className="h-full flex flex-col overflow-hidden bg-t-panel">
       {/* ── Tab 栏 ── */}
-      <div className="flex items-center border-b shrink-0 h-9"
+      <div className="flex items-center border-b shrink-0 h-9 overflow-hidden min-w-0"
         style={{ borderColor: "var(--border-color)" }}
       >
         {/* 自选 Tab */}
         <button
           onClick={() => changeTab("favorites")}
-          className={`px-3 h-full text-xs font-medium transition-colors relative flex items-center gap-1.5 ${
+          className={`px-2 h-full text-xs font-medium transition-colors relative flex items-center gap-1 shrink-0 whitespace-nowrap ${
             tab === "favorites" ? "text-t-text" : "text-t-text-3 hover:text-t-text-2"
           }`}
         >
           自选
           {favCount > 0 && (
-            <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${
+            <span className={`text-[10px] px-1 py-0.5 rounded-full tabular-nums ${
               tab === "favorites"
                 ? "bg-t-accent-bg text-t-accent"
                 : "bg-t-tertiary text-t-text-3"
@@ -347,34 +398,35 @@ export default function WatchList({ products, selectedId, selectedDeliveryPeriod
               {favCount}
             </span>
           )}
-          {tab === "favorites" && <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-t-accent rounded-full" />}
+          {tab === "favorites" && <span className="absolute bottom-0 left-1.5 right-1.5 h-0.5 bg-t-accent rounded-full" />}
         </button>
 
         {/* 大盘 Tab */}
         <button
           onClick={() => changeTab("overview")}
-          className={`px-3 h-full text-xs font-medium transition-colors relative ${
+          className={`px-2 h-full text-xs font-medium transition-colors relative shrink-0 whitespace-nowrap overflow-hidden ${
             tab === "overview" ? "text-t-text" : "text-t-text-3 hover:text-t-text-2"
           }`}
         >
           品种总览
-          {tab === "overview" && <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-t-accent rounded-full" />}
+          {tab === "overview" && <span className="absolute bottom-0 left-1.5 right-1.5 h-0.5 bg-t-accent rounded-full" />}
         </button>
 
         {/* 自选排序 */}
         {tab === "favorites" && favCount > 0 && (
           <button
             onClick={cycleSort}
-            className="ml-auto mr-1 text-[11px] text-t-text-3 hover:text-t-text-2 transition-colors flex items-center gap-1"
+            title={`排序：${sortLabel[favSort]}`}
+            className="ml-auto mr-0.5 text-[11px] text-t-text-3 hover:text-t-text-2 transition-colors flex items-center gap-0.5 shrink-0 min-w-0 max-w-[4.5rem] overflow-hidden"
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
             </svg>
-            {sortLabel[favSort]}
+            <span className="truncate">{sortLabel[favSort]}</span>
           </button>
         )}
         {/* 非自选 tab 时，用 ml-auto 撑开，让收起按钮始终在最右侧 */}
-        {tab !== "favorites" && <span className="ml-auto" />}
+        {tab !== "favorites" && <span className="ml-auto min-w-0" />}
         {/* 收起按钮 — Tab 栏最右侧 */}
         {onCollapse && (
           <button

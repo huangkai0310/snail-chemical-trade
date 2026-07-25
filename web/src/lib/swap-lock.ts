@@ -149,7 +149,9 @@ export function swapStatusLabel(
 ): string {
   if (negotiating) return "商谈中";
   if (status === "MATCHED") return "已成交";
-  if (status === "CANCELLED") return "已撤盘";
+  if (status === "CANCELLED") {
+    return sellFilled > 0 || buyFilled > 0 ? "已撤盘（部分成交）" : "已撤盘";
+  }
   if (status === "EXPIRED") {
     return sellFilled > 0 || buyFilled > 0 ? "已过期（部分成交）" : "已过期";
   }

@@ -5,6 +5,7 @@ import type { Listing, SwapListing, CounterOffer } from "@/lib/types";
 import { DEFAULT_NEGOTIABLE_TERMS, sanitizeNegotiableTerms } from "@/lib/types";
 import { DELIVERY_METHOD_OPTIONS } from "@/components/CreateListingModal";
 import Combobox from "@/components/ui/Combobox";
+import DeliveryPeriodPicker from "@/components/DeliveryPeriodPicker";
 import { sanitizeText, isSafeInput } from "@/lib/validate";
 import { formatFreeStorage, formatNegotiableTerms, formatPartial, formatSpecs, formatBoardSerial } from "@/lib/format";
 import ModalUpdateNotice from "./ModalUpdateNotice";
@@ -763,14 +764,10 @@ export default function CounterOfferModal({
                     <span>交割期</span>
                     <span className="text-xs font-normal text-t-text-3">原值：{prefill.dp || "—"}</span>
                   </label>
-                  <input
-                    type="text"
+                  <DeliveryPeriodPicker
                     value={deliveryPeriod}
-                    onChange={(e) => setDeliveryPeriod(sanitizeText(e.target.value))}
-                    placeholder="如 现货 / 2606下"
-                    className={highlightInputCls}
-                    disabled={loading}
-                    readOnly={loading}
+                    onChange={setDeliveryPeriod}
+                    placeholder="在日历中选择交割期"
                   />
                 </div>
               )}

@@ -166,6 +166,22 @@ export interface TakeListingResponse {
   trades: Trade[];
 }
 
+// ---------- 数据源 ----------
+
+/** 数据源类型：exchange=实时交易行情, warehouse=PostgreSQL持久化历史 */
+export type DataSource = "exchange" | "warehouse";
+
+export interface DataSourceOption {
+  key: DataSource;
+  label: string;
+  description: string;
+}
+
+export const DATA_SOURCES: DataSourceOption[] = [
+  { key: "exchange", label: "实时行情", description: "从交易平台实时成交数据生成K线" },
+  { key: "warehouse", label: "历史仓库", description: "从PostgreSQL指标缓存读取持久化历史数据" },
+];
+
 // ---------- 价格走势 ----------
 
 export interface PriceCandle {

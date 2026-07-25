@@ -146,6 +146,57 @@ export function clearFavoritesMemory() {
   setMemory(null, [], false);
 }
 
+/** 合约取消时：从本机自选移除；返回是否原先已自选 */
+export function removeFavoriteByContract(productId: string, deliveryPeriod: string): boolean {
+  const uid = useAuthStore.getState().user?.id ?? null;
+  if (!uid || !productId) return false;
+  const dp = (deliveryPeriod || DEFAULT_DELIVERY).trim() || DEFAULT_DELIVERY;
+  const entry = parseFavoriteEntry(`${productId}:${dp}`);
+  if (!entry) return false;
+  const prev = memoryKeys.length ? memoryKeys : readLocalKeys(uid);
+  if (!prev.includes(entry.key)) return false;
+  const next = prev.filter((k) => k !== entry.key);
+  setMemory(uid, next, true);
+  // 服务端已批量清理；再写一次本地纠偏，避免把已删键推回
+  scheduleServerSave(uid, next);
+  return true;
+}
+
+/**
+ * 按品种活跃合约列表清理自选：不在 activePeriods 内的交割期（现货除外）一律移除。
+ * 返回被移除的条目。
+ */
+export function pruneFavoritesForProduct(
+  productId: string,
+  activePeriods: Iterable<string>
+): FavoriteEntry[] {
+  const uid = useAuthStore.getState().user?.id ?? null;
+  if (!uid || !productId) return [];
+  const active = new Set<string>();
+  for (const p of activePeriods) {
+    const v = (p || "").trim() || DEFAULT_DELIVERY;
+    active.add(v);
+  }
+  active.add(DEFAULT_DELIVERY);
+
+  const prev = memoryKeys.length ? memoryKeys : readLocalKeys(uid);
+  const removed: FavoriteEntry[] = [];
+  const next: string[] = [];
+  for (const key of prev) {
+    const entry = parseFavoriteEntry(key);
+    if (!entry) continue;
+    if (entry.productId === productId && !active.has(entry.deliveryPeriod)) {
+      removed.push(entry);
+      continue;
+    }
+    next.push(entry.key);
+  }
+  if (removed.length === 0) return [];
+  setMemory(uid, next, true);
+  scheduleServerSave(uid, next);
+  return removed;
+}
+
 function getSnapshot(): FavoriteEntry[] {
   return memoryEntries;
 }

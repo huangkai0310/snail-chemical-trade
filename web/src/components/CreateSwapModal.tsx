@@ -21,7 +21,15 @@ import QtyModeFields from "./QtyModeFields";
 import { toast } from "./Toast";
 import { confirmDialog } from "./ConfirmDialog";
 import { SwapConfirmSheet } from "./PostingConfirmSheet";
-import { defaultExpiresAtLocal, defaultStartsAtLocal, toDatetimeLocalValue } from "@/lib/expires";
+import {
+  defaultExpiresAtLocal,
+  defaultStartsAtLocal,
+  isWorkdayDateTimeLocal,
+  nextWorkdayExpireLocal,
+  nextWorkdayMorningLocal,
+} from "@/lib/expires";
+import DeliveryPeriodPicker from "./DeliveryPeriodPicker";
+import WorkdayDateTimePicker from "./WorkdayDateTimePicker";
 
 interface CreateSwapFormData {
   sell_product_id: string;
@@ -79,25 +87,6 @@ interface Props {
   loading?: boolean;
   onClose: () => void;
   onSubmit: (data: CreateSwapParams) => void;
-}
-
-function buildDeliveryOptions(): string[] {
-  const options: string[] = ["现货"];
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  const startYear = now.getFullYear();
-  const startMonth = now.getMonth();
-  for (let offset = 0; offset <= 12; offset++) {
-    const totalMonths = startMonth + offset;
-    const year = startYear + Math.floor(totalMonths / 12);
-    const month = totalMonths % 12;
-    const yy = String(year).slice(-2);
-    const mm = String(month + 1).padStart(2, "0");
-    const prefix = `${yy}${mm}`;
-    if (new Date(year, month, 15) >= now) options.push(`${prefix}中`);
-    if (new Date(year, month, 28) >= now) options.push(`${prefix}下`);
-  }
-  return options;
 }
 
 /** 自定义 Combobox：可输入 + 可选择，下拉面板宽度与输入框一致 */
@@ -159,58 +148,6 @@ function Combobox({
             </button>
           ))}
         </div>
-      )}
-    </div>
-  );
-}
-
-function DeliverySelect({
-  value,
-  onChange,
-  options,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: string[];
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="w-full px-3 py-2 border border-t-border rounded-lg text-sm text-left bg-t-panel text-t-text flex items-center justify-between focus:ring-2 focus:ring-brand-400 outline-none"
-      >
-        <span className={value ? "text-t-text" : "text-t-text-3"}>
-          {value || "选择交割期"}
-        </span>
-        <svg
-          className={`w-4 h-4 text-t-text-3 transition-transform ${open ? "rotate-180" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute z-50 mt-1 w-full bg-t-panel border border-t-border rounded-lg shadow-lg max-h-44 overflow-y-auto">
-            {options.map((opt) => (
-              <button
-                key={opt}
-                type="button"
-                onClick={() => { onChange(opt); setOpen(false); }}
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-brand-600/10 transition-colors ${
-                  value === opt ? "bg-brand-600/10 text-brand-500 font-medium" : "text-t-text"
-                }`}
-              >
-                {opt}
-              </button>
-            ))}
-          </div>
-        </>
       )}
     </div>
   );
@@ -331,7 +268,6 @@ export default function CreateSwapModal({
 }: Props) {
   const [form, setForm] = useState<CreateSwapFormData>(emptyForm(defaultProductId));
   const [minQtyError, setMinQtyError] = useState("");
-  const deliveryOptions = buildDeliveryOptions();
   const sellPaymentRef = useRef("");
   const buyPaymentRef = useRef("");
   // 必须在任何 early return 之前订阅，避免 Hooks 数量变化导致崩溃
@@ -599,6 +535,12 @@ export default function CreateSwapModal({
   if (form.buy_allow_counter_offer && (!form.buy_negotiable_terms || form.buy_negotiable_terms.length === 0)) {
     missingFields.push("换入商谈条款（至少选一项）");
   }
+  if (!isWorkdayDateTimeLocal(form.starts_at, true)) {
+    missingFields.push("开始时间（须为工作日；休市日不可立即挂盘）");
+  }
+  if (!isWorkdayDateTimeLocal(form.expires_at)) {
+    missingFields.push("过期时间（须为工作日）");
+  }
 
   const isValid = missingFields.length === 0;
 
@@ -748,10 +690,9 @@ export default function CreateSwapModal({
 
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">交割期</label>
-                  <DeliverySelect
+                  <DeliveryPeriodPicker
                     value={form.sell_delivery_period}
                     onChange={(v) => update("sell_delivery_period", v)}
-                    options={deliveryOptions}
                   />
                 </div>
 
@@ -852,10 +793,9 @@ export default function CreateSwapModal({
 
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">交割期</label>
-                  <DeliverySelect
+                  <DeliveryPeriodPicker
                     value={form.buy_delivery_period}
                     onChange={(v) => update("buy_delivery_period", v)}
-                    options={deliveryOptions}
                   />
                 </div>
 
@@ -1073,13 +1013,16 @@ export default function CreateSwapModal({
           <div className="mt-3">
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">
               开始时间
-              <span className="ml-2 text-xs font-normal text-t-text-3">空=立即发布；可预约到点自动挂出</span>
+              <span className="ml-2 text-xs font-normal text-t-text-3">仅工作日；空=立即发布（休市日不可立即挂）</span>
             </label>
-            <input
-              type="datetime-local"
+            <WorkdayDateTimePicker
               value={form.starts_at}
-              onChange={(e) => setForm((prev) => ({ ...prev, starts_at: e.target.value }))}
-              className="w-full px-3 py-2.5 border border-sky-400/60 rounded-lg text-sm bg-sky-50/50 dark:bg-sky-950/20 text-t-text focus:ring-2 focus:ring-sky-400 focus:border-sky-500 outline-none"
+              onChange={(v) => setForm((prev) => ({ ...prev, starts_at: v }))}
+              allowEmpty
+              emptyLabel="立即发布"
+              placeholder="选择开始时间"
+              accent="sky"
+              defaultTime="09:00"
             />
             <div className="mt-1.5 flex flex-wrap gap-2">
               <button
@@ -1091,14 +1034,10 @@ export default function CreateSwapModal({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const now = new Date();
-                  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
-                  setForm((prev) => ({ ...prev, starts_at: toDatetimeLocalValue(d) }));
-                }}
+                onClick={() => setForm((prev) => ({ ...prev, starts_at: nextWorkdayMorningLocal() }))}
                 className="text-xs px-2 py-1 rounded border border-t-border text-t-text-2 hover:bg-t-hover"
               >
-                明日9:00
+                下一工作日9:00
               </button>
             </div>
           </div>
@@ -1107,13 +1046,14 @@ export default function CreateSwapModal({
           <div className="mt-3">
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">
               过期时间
-              <span className="ml-2 text-xs font-normal text-t-text-3">默认当日 18:00</span>
+              <span className="ml-2 text-xs font-normal text-t-text-3">仅工作日；默认当日/下一工作日 18:00</span>
             </label>
-            <input
-              type="datetime-local"
+            <WorkdayDateTimePicker
               value={form.expires_at}
-              onChange={(e) => setForm((prev) => ({ ...prev, expires_at: e.target.value }))}
-              className="w-full px-3 py-2.5 border border-amber-400/60 rounded-lg text-sm bg-amber-50/50 dark:bg-amber-950/20 text-t-text focus:ring-2 focus:ring-amber-400 focus:border-amber-500 outline-none"
+              onChange={(v) => setForm((prev) => ({ ...prev, expires_at: v }))}
+              placeholder="选择过期时间"
+              accent="amber"
+              defaultTime="18:00"
             />
             <div className="mt-1.5 flex flex-wrap gap-2">
               <button
@@ -1121,18 +1061,14 @@ export default function CreateSwapModal({
                 onClick={() => setForm((prev) => ({ ...prev, expires_at: defaultExpiresAtLocal() }))}
                 className="text-xs px-2 py-1 rounded border border-amber-400/50 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40"
               >
-                当日18:00
+                默认18:00
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const now = new Date();
-                  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 18, 0, 0, 0);
-                  setForm((prev) => ({ ...prev, expires_at: toDatetimeLocalValue(d) }));
-                }}
+                onClick={() => setForm((prev) => ({ ...prev, expires_at: nextWorkdayExpireLocal() }))}
                 className="text-xs px-2 py-1 rounded border border-t-border text-t-text-2 hover:bg-t-hover"
               >
-                次日18:00
+                下一工作日18:00
               </button>
             </div>
           </div>

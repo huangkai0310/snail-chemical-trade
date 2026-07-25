@@ -18,7 +18,15 @@ import QtyModeFields from "./QtyModeFields";
 import { toast } from "./Toast";
 import { confirmDialog } from "./ConfirmDialog";
 import { ListingConfirmSheet } from "./PostingConfirmSheet";
-import { defaultExpiresAtLocal, defaultStartsAtLocal, toDatetimeLocalValue } from "@/lib/expires";
+import {
+  defaultExpiresAtLocal,
+  defaultStartsAtLocal,
+  isWorkdayDateTimeLocal,
+  nextWorkdayExpireLocal,
+  nextWorkdayMorningLocal,
+} from "@/lib/expires";
+import DeliveryPeriodPicker from "./DeliveryPeriodPicker";
+import WorkdayDateTimePicker from "./WorkdayDateTimePicker";
 
 export interface CreateListingFormData {
   product_id: string;
@@ -191,43 +199,11 @@ function syncFreeStorageDays(prevDays: string, totalQty: number): string {
   return prevDays;
 }
 
-// 交割期选项："YYMM中"=当月15日，"YYMM下"=当月最后一个工作日（取28日）
-// 过滤掉交割日期小于当天的选项
-function buildDeliveryOptions(): string[] {
-  const options: string[] = ["现货"];
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-
-  const startYear = now.getFullYear();
-  const startMonth = now.getMonth(); // 0-based
-
-  for (let offset = 0; offset <= 12; offset++) {
-    const totalMonths = startMonth + offset;
-    const year = startYear + Math.floor(totalMonths / 12);
-    const month = totalMonths % 12; // 0-based
-    const yy = String(year).slice(-2);
-    const mm = String(month + 1).padStart(2, "0");
-    const prefix = `${yy}${mm}`;
-
-    // 月中 = 当月15日
-    const midDate = new Date(year, month, 15);
-    // 月下 = 当月28日（近似代表月底）
-    const endDate = new Date(year, month, 28);
-
-    if (midDate >= now) {
-      options.push(`${prefix}中`);
-    }
-    if (endDate >= now) {
-      options.push(`${prefix}下`);
-    }
-  }
-  return options;
-}
+// 交割期由日历选择（仅工作日）：当天→现货，月中工作日→YYMM中，月末工作日→YYMM下，其余→YYMMDD（如 260725）
 
 export default function CreateListingModal({ open, products, loading, initialSide, defaultProductId, marketType, onClose, onSubmit }: Props) {
   const [form, setForm] = useState<CreateListingFormData>(initialState);
   const [minQtyError, setMinQtyError] = useState("");
-  const deliveryOptions = buildDeliveryOptions();
   const prevPaymentRef = useRef("");
   // 必须在任何 early return 之前订阅，避免 Hooks 数量变化导致崩溃
   useSyncExternalStore(subscribePostingPrefs, getPostingPrefsCache, getPostingPrefsCache);
@@ -413,6 +389,12 @@ export default function CreateListingModal({ open, products, loading, initialSid
   // 商谈条款校验：选了可商谈但未选任何条款
   if (form.allow_counter_offer && (!form.negotiable_terms || form.negotiable_terms.length === 0)) {
     missingFields.push("商谈条款（至少选一项）");
+  }
+  if (!isWorkdayDateTimeLocal(form.starts_at, true)) {
+    missingFields.push("开始时间（须为工作日；休市日不可立即挂盘）");
+  }
+  if (!isWorkdayDateTimeLocal(form.expires_at)) {
+    missingFields.push("过期时间（须为工作日）");
   }
 
   const isValid = missingFields.length === 0;
@@ -626,15 +608,17 @@ export default function CreateListingModal({ open, products, loading, initialSid
             />
           </div>
 
-          {/* 交割期（combobox：预设选项 + 自定义输入） */}
+          {/* 交割期（日历选择） */}
           <div>
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">交割期</label>
-            <Combobox
+            <DeliveryPeriodPicker
               value={form.delivery_period}
               onChange={(v) => update("delivery_period", v)}
-              options={deliveryOptions}
-              placeholder="选择或输入交割期"
+              placeholder="在日历中选择交割期"
             />
+            <p className="mt-1 text-[10px] text-t-text-3">
+              仅工作日可选：当天→现货；月中工作日→月中（如 2607中）；月末工作日→月下；其他按 YYMMDD（如 260725）
+            </p>
           </div>
 
           {/* 交割地 */}
@@ -790,13 +774,16 @@ export default function CreateListingModal({ open, products, loading, initialSid
           <div>
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">
               开始时间
-              <span className="ml-2 text-xs font-normal text-t-text-3">空=立即发布；可预约到点自动挂出</span>
+              <span className="ml-2 text-xs font-normal text-t-text-3">仅工作日；空=立即发布（休市日不可立即挂）</span>
             </label>
-            <input
-              type="datetime-local"
+            <WorkdayDateTimePicker
               value={form.starts_at}
-              onChange={(e) => update("starts_at", e.target.value)}
-              className="w-full px-3 py-2.5 border border-sky-400/60 rounded-lg text-sm bg-sky-50/50 dark:bg-sky-950/20 text-t-text focus:ring-2 focus:ring-sky-400 focus:border-sky-500 outline-none"
+              onChange={(v) => update("starts_at", v)}
+              allowEmpty
+              emptyLabel="立即发布"
+              placeholder="选择开始时间"
+              accent="sky"
+              defaultTime="09:00"
             />
             <div className="mt-1.5 flex flex-wrap gap-2">
               <button
@@ -808,14 +795,10 @@ export default function CreateListingModal({ open, products, loading, initialSid
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const now = new Date();
-                  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0, 0);
-                  update("starts_at", toDatetimeLocalValue(d));
-                }}
+                onClick={() => update("starts_at", nextWorkdayMorningLocal())}
                 className="text-xs px-2 py-1 rounded border border-t-border text-t-text-2 hover:bg-t-hover"
               >
-                明日9:00
+                下一工作日9:00
               </button>
             </div>
           </div>
@@ -824,13 +807,14 @@ export default function CreateListingModal({ open, products, loading, initialSid
           <div>
             <label className="block text-sm font-medium text-t-text-2 mb-1.5">
               过期时间
-              <span className="ml-2 text-xs font-normal text-t-text-3">默认当日 18:00</span>
+              <span className="ml-2 text-xs font-normal text-t-text-3">仅工作日；默认当日/下一工作日 18:00</span>
             </label>
-            <input
-              type="datetime-local"
+            <WorkdayDateTimePicker
               value={form.expires_at}
-              onChange={(e) => update("expires_at", e.target.value)}
-              className="w-full px-3 py-2.5 border border-amber-400/60 rounded-lg text-sm bg-amber-50/50 dark:bg-amber-950/20 text-t-text focus:ring-2 focus:ring-amber-400 focus:border-amber-500 outline-none"
+              onChange={(v) => update("expires_at", v)}
+              placeholder="选择过期时间"
+              accent="amber"
+              defaultTime="18:00"
             />
             <div className="mt-1.5 flex flex-wrap gap-2">
               <button
@@ -838,18 +822,14 @@ export default function CreateListingModal({ open, products, loading, initialSid
                 onClick={() => update("expires_at", defaultExpiresAtLocal())}
                 className="text-xs px-2 py-1 rounded border border-amber-400/50 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40"
               >
-                当日18:00
+                默认18:00
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const now = new Date();
-                  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 18, 0, 0, 0);
-                  update("expires_at", toDatetimeLocalValue(d));
-                }}
+                onClick={() => update("expires_at", nextWorkdayExpireLocal())}
                 className="text-xs px-2 py-1 rounded border border-t-border text-t-text-2 hover:bg-t-hover"
               >
-                次日18:00
+                下一工作日18:00
               </button>
             </div>
           </div>

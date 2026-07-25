@@ -28,6 +28,7 @@ import type {
   CounterOfferPageResponse,
   BlacklistItem,
   BlacklistPageResponse,
+  DataSource,
 } from "./types";
 import { upsertSavedAccount } from "./accounts";
 
@@ -113,6 +114,27 @@ export function fetchProducts(): Promise<Product[]> {
   return request<Product[]>("/api/v1/products");
 }
 
+export interface ProductContract {
+  id: number;
+  product_id: string;
+  delivery_period: string;
+  created_by?: string;
+  first_listing_id?: string;
+  created_at: string;
+}
+
+/** 某品种已建立的交割期合约 */
+export function fetchProductContracts(productId: string): Promise<ProductContract[]> {
+  return request<{ data: ProductContract[] }>(
+    `/api/v1/products/${encodeURIComponent(productId)}/contracts`
+  ).then((r) => r.data ?? []);
+}
+
+/** 市场开闭市状态（公开） */
+export function fetchMarketStatus(): Promise<{ market_open: boolean; reason?: string }> {
+  return request<{ market_open: boolean; reason?: string }>("/api/v1/market-status");
+}
+
 /** 获取某产品的挂牌列表（简化版，不含分页） */
 export function fetchListings(productId: string): Promise<Listing[]> {
   return request<ListingPageResponse>(
@@ -142,14 +164,56 @@ export function fetchListingsPaged(params: {
   return request<ListingPageResponse>(`/api/v1/listings?${sp}`);
 }
 
+/** 指标缓存响应 */
+interface IndicatorCacheListResponse {
+  data: Array<{
+    id: number;
+    product_id: string;
+    delivery_period: string;
+    interval: string;
+    indicator: string;
+    params: Record<string, unknown>;
+    value: PriceCandle[] | Record<string, unknown>;
+    computed_at: string;
+    data_through: string;
+  }>;
+}
+
+/**
+ * 从指标缓存（PostgreSQL warehouse）获取 OHLCV K 线
+ * indicator_cache 表中 indicator="ohlcv" 的 value 字段存储 PriceCandle 数组
+ */
+async function fetchPriceHistoryFromWarehouse(
+  productId: string,
+  interval: string,
+  limit: number,
+  deliveryPeriod: string,
+): Promise<PriceCandle[]> {
+  const url = `/api/v1/indicators/list?product_id=${encodeURIComponent(productId)}&delivery_period=${encodeURIComponent(deliveryPeriod)}&interval=${encodeURIComponent(interval)}&indicator=ohlcv`;
+  const res = await request<IndicatorCacheListResponse>(url);
+  if (!res.data || res.data.length === 0) return [];
+  const raw = res.data[0].value;
+  if (!Array.isArray(raw)) return [];
+  // 按 time 升序，截取最近 limit 条
+  const candles = raw as PriceCandle[];
+  candles.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+  return candles.slice(-limit);
+}
+
 /** 获取价格走势 K 线（合约 = 品种 + 交割期；默认现货） */
 export function fetchPriceHistory(
   productId: string,
   interval: string = "1h",
   limit: number = 60,
-  deliveryPeriod?: string
+  deliveryPeriod?: string,
+  dataSource?: DataSource,
 ): Promise<PriceCandle[]> {
   const dp = deliveryPeriod?.trim() || "现货";
+  // warehouse 数据源：从 PostgreSQL 指标缓存读取
+  if (dataSource === "warehouse") {
+    return fetchPriceHistoryFromWarehouse(productId, interval, limit, dp);
+  }
+  // 默认 exchange 数据源：从实时交易行情读取
   const url = `/api/v1/trades/price-history?product_id=${encodeURIComponent(productId)}&interval=${interval}&limit=${limit}&delivery_period=${encodeURIComponent(dp)}`;
   return request<PriceHistoryResponse>(url).then((r) => r.data);
 }
