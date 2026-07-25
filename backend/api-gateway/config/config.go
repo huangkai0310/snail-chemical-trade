@@ -6,11 +6,13 @@ import (
 )
 
 type Config struct {
-	Port          string
-	DatabaseURL   string
-	JWTSecret     string
-	RedisAddr     string
-	MigrationsDir string
+	Port              string
+	DatabaseURL       string
+	JWTSecret         string
+	RedisAddr         string
+	MigrationsDir     string
+	CrawlerScriptPath string // Python 爬虫入口脚本路径（如 /opt/snailtrade/crawler/scripts/cron_collect.py）
+	CrawlerPythonBin  string // Python 解释器路径（如 python3）
 }
 
 func Load() *Config {
@@ -20,11 +22,13 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:          getEnv("PORT", "8080"),
-		DatabaseURL:   getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/snailtrade?sslmode=disable"),
-		JWTSecret:     jwtSecret,
-		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6379"),
-		MigrationsDir: getEnv("MIGRATIONS_DIR", ""),
+		Port:              getEnv("PORT", "8080"),
+		DatabaseURL:       getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/snailtrade?sslmode=disable"),
+		JWTSecret:         jwtSecret,
+		RedisAddr:         getEnv("REDIS_ADDR", "localhost:6379"),
+		MigrationsDir:     getEnv("MIGRATIONS_DIR", ""),
+		CrawlerScriptPath: getEnv("CRAWLER_SCRIPT_PATH", ""),
+		CrawlerPythonBin:  getEnv("CRAWLER_PYTHON_BIN", "python3"),
 	}
 }
 

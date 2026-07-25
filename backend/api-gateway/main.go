@@ -231,6 +231,9 @@ func main() {
 		contractHandler.PurgePastContracts()
 		return nil
 	})
+	sched.Register("collect_market_data", func(ctx context.Context) error {
+		return handler.CollectMarketData(ctx, cfg.CrawlerScriptPath, cfg.CrawlerPythonBin)
+	})
 	sched.Start()
 
 	// 路由
