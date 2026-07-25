@@ -1,0 +1,420 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== 主题变量 ===== */
+:root,
+[data-theme="light"] {
+  --bg-primary: #d8dee8;
+  --bg-panel: #eef0f5;
+  --bg-card: #ffffff;
+  --bg-hover: rgba(0, 0, 0, 0.06);
+  --bg-input: #ffffff;
+
+  --text-primary: #1a202c;
+  --text-secondary: #4a5568;
+  --text-muted: #a0aec0;
+
+  --border-color: #e2e8f0;
+
+  --color-up: #dc2626;
+  --color-down: #16a34a;
+  --color-info: #3b82f6;
+  --color-warning: #f59e0b;
+  --color-success: #22c55e;
+  --color-error: #ef4444;
+}
+
+[data-theme="dark"] {
+  --bg-primary: #090c10;
+  --bg-panel: #161b22;
+  --bg-card: #1c2333;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-input: #1c2333;
+
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6b7280;
+
+  --border-color: #30363d;
+
+  --color-up: #ef4444;
+  --color-down: #22c55e;
+  --color-info: #60a5fa;
+  --color-warning: #fbbf24;
+  --color-success: #4ade80;
+  --color-error: #f87171;
+}
+
+/* ===== 基础样式 ===== */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ===== 滚动条 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ===== 数据表格公共样式 ===== */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.data-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  user-select: none;
+}
+.data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+.data-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+/* ===== 表单公共样式 ===== */
+.form-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.form-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.form-input:focus {
+  border-color: var(--color-info);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+.form-input.error {
+  border-color: var(--color-error);
+}
+
+/* ===== 状态标签 ===== */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.status-badge.on { background: rgba(34, 197, 94, 0.15); color: var(--color-success); }
+.status-badge.off { background: rgba(239, 68, 68, 0.15); color: var(--color-error); }
+.status-badge.pending { background: rgba(245, 158, 11, 0.15); color: var(--color-warning); }
+.status-badge.active { background: rgba(59, 130, 246, 0.15); color: var(--color-info); }
+
+/* ===== 管理后台登录页 ===== */
+.auth-shell {
+  --auth-ink: #e8eef6;
+  --auth-muted: #8b9bb0;
+  --auth-line: rgba(232, 238, 246, 0.14);
+  --auth-accent: #c45c4a;
+  --auth-accent-hover: #d46b58;
+  --auth-field: rgba(8, 14, 24, 0.55);
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: hidden;
+  color: var(--auth-ink);
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  background: #070b12;
+}
+
+.auth-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.auth-atmosphere__wash {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 80% at 12% 18%, rgba(56, 92, 120, 0.35), transparent 55%),
+    radial-gradient(90% 70% at 88% 82%, rgba(196, 92, 74, 0.18), transparent 50%),
+    linear-gradient(160deg, #0a101a 0%, #121a28 48%, #0b0f16 100%);
+  animation: auth-wash 14s ease-in-out infinite alternate;
+}
+
+.auth-atmosphere__grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(rgba(232, 238, 246, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(232, 238, 246, 0.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 40% 35%, #000 20%, transparent 72%);
+}
+
+.auth-atmosphere__beam {
+  position: absolute;
+  top: -20%;
+  left: 35%;
+  width: 42%;
+  height: 140%;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    rgba(140, 170, 200, 0.08) 45%,
+    transparent 70%
+  );
+  transform: rotate(-12deg);
+  animation: auth-beam 10s ease-in-out infinite alternate;
+}
+
+.auth-stage {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(1.5rem, 5vw, 3.5rem) clamp(1.25rem, 4vw, 2.5rem);
+  max-width: 28rem;
+  margin: 0 auto;
+}
+
+.auth-brand {
+  margin-bottom: 2.25rem;
+  animation: auth-rise 0.7s ease-out both;
+}
+
+.auth-brand__mark {
+  width: 3rem;
+  height: 3rem;
+  display: grid;
+  place-items: center;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--auth-line);
+  background: rgba(196, 92, 74, 0.12);
+  color: var(--auth-accent);
+  font-family: "DIN Alternate", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.auth-brand__name {
+  margin: 0;
+  font-size: clamp(2.75rem, 8vw, 3.5rem);
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #f4f7fb;
+}
+
+.auth-brand__en {
+  margin: 0.65rem 0 0;
+  font-family: "Segoe UI", "DIN Alternate", sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--auth-muted);
+}
+
+.auth-brand__tag {
+  margin: 0.85rem 0 0;
+  font-size: 0.875rem;
+  color: rgba(232, 238, 246, 0.72);
+  letter-spacing: 0.04em;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--auth-line);
+  animation: auth-rise 0.85s ease-out 0.08s both;
+}
+
+.auth-alert {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.auth-field {
+  display: block;
+}
+
+.auth-field__label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--auth-muted);
+}
+
+.auth-field__row {
+  position: relative;
+}
+
+.auth-field__input {
+  width: 100%;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--auth-line);
+  border-radius: 0;
+  background: var(--auth-field);
+  color: var(--auth-ink);
+  font-size: 0.9375rem;
+  outline: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.auth-field__row .auth-field__input {
+  padding-right: 3.5rem;
+}
+
+.auth-field__input::placeholder {
+  color: rgba(139, 155, 176, 0.7);
+}
+
+.auth-field__input:focus {
+  border-color: rgba(196, 92, 74, 0.7);
+  background: rgba(8, 14, 24, 0.72);
+}
+
+.auth-field__input:disabled {
+  opacity: 0.6;
+}
+
+.auth-field__toggle {
+  position: absolute;
+  right: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--auth-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  padding: 0.25rem 0.35rem;
+}
+
+.auth-field__toggle:hover {
+  color: var(--auth-ink);
+}
+
+.auth-submit {
+  margin-top: 0.35rem;
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border: 0;
+  border-radius: 0;
+  background: var(--auth-accent);
+  color: #fff7f5;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.auth-submit:hover:not(:disabled) {
+  background: var(--auth-accent-hover);
+}
+
+.auth-submit:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.auth-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.auth-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 2rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: rgba(139, 155, 176, 0.85);
+  animation: auth-rise 1s ease-out 0.16s both;
+}
+
+@keyframes auth-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes auth-wash {
+  from {
+    filter: saturate(1);
+  }
+  to {
+    filter: saturate(1.15) brightness(1.05);
+  }
+}
+
+@keyframes auth-beam {
+  from {
+    opacity: 0.55;
+    transform: rotate(-12deg) translateX(-2%);
+  }
+  to {
+    opacity: 0.9;
+    transform: rotate(-10deg) translateX(2%);
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-brand__name {
+    letter-spacing: 0.08em;
+  }
+}
